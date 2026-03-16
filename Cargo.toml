@@ -11,4 +11,5 @@ dirs = "5"
 rspotify = { version = "0.13", default-features = false, features = ["client-ureq"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 tokio = { version = "1", features = ["full"] }

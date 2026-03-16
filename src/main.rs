@@ -66,6 +66,8 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    let _config = auth::load_config()?;
+
     match cli.command {
         Command::Play { .. } => println!("not yet implemented"),
         Command::Pause => println!("not yet implemented"),
