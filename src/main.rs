@@ -75,8 +75,8 @@ fn main() -> Result<()> {
         Command::Prev => println!("not yet implemented"),
         Command::Now => commands::search::now(&spotify)?,
         Command::Search { .. } => println!("not yet implemented"),
-        Command::Devices => println!("not yet implemented"),
-        Command::Device { .. } => println!("not yet implemented"),
+        Command::Devices => commands::devices::devices(&spotify)?,
+        Command::Device { name } => commands::devices::transfer(&spotify, &name)?,
         Command::Volume { .. } => println!("not yet implemented"),
         Command::Queue { .. } => println!("not yet implemented"),
     }
