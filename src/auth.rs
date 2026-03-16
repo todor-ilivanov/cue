@@ -60,13 +60,15 @@ pub fn save_token(token: &Token) -> Result<()> {
 
 pub fn delete_token() -> Result<()> {
     let path = token_path()?;
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => {
-            Err(e).with_context(|| format!("could not delete token file: {}", path.display()))
-        }
-    }
+    fs::remove_file(&path)
+        .or_else(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .with_context(|| format!("could not delete token file: {}", path.display()))
 }
 
 pub fn config_dir() -> Result<PathBuf> {

@@ -24,11 +24,12 @@ pub async fn build_client(config: Config) -> Result<AuthCodeSpotify> {
     let spotify = AuthCodeSpotify::new(creds, oauth);
 
     if let Some(token) = auth::load_token()? {
-        if token.is_expired() {
-            *spotify.token.lock().unwrap() = Some(token);
+        let expired = token.is_expired();
+        *spotify.token.lock().expect("token mutex poisoned") = Some(token);
+        if expired {
             match spotify.refresh_token() {
                 Ok(()) => {
-                    if let Some(t) = spotify.token.lock().unwrap().as_ref() {
+                    if let Some(t) = spotify.token.lock().expect("token mutex poisoned").as_ref() {
                         auth::save_token(t)?;
                     }
                 }
@@ -37,8 +38,6 @@ pub async fn build_client(config: Config) -> Result<AuthCodeSpotify> {
                     bail!("token refresh failed — re-run the command to re-authenticate");
                 }
             }
-        } else {
-            *spotify.token.lock().unwrap() = Some(token);
         }
         return Ok(spotify);
     }
@@ -54,7 +53,7 @@ pub async fn build_client(config: Config) -> Result<AuthCodeSpotify> {
         .request_token(&code)
         .context("failed to exchange authorization code for token")?;
 
-    if let Some(t) = spotify.token.lock().unwrap().as_ref() {
+    if let Some(t) = spotify.token.lock().expect("token mutex poisoned").as_ref() {
         auth::save_token(t)?;
     }
 
