@@ -68,11 +68,15 @@ fn main() -> Result<()> {
     let spotify = client::build_client(auth::load_config()?)?;
 
     match cli.command {
-        Command::Play { .. } => println!("not yet implemented"),
-        Command::Pause => println!("not yet implemented"),
-        Command::Resume => println!("not yet implemented"),
-        Command::Next => println!("not yet implemented"),
-        Command::Prev => println!("not yet implemented"),
+        Command::Play {
+            query,
+            album,
+            playlist,
+        } => commands::play::play(&spotify, &query, album, playlist)?,
+        Command::Pause => commands::play::pause(&spotify)?,
+        Command::Resume => commands::play::resume(&spotify)?,
+        Command::Next => commands::play::next(&spotify)?,
+        Command::Prev => commands::play::prev(&spotify)?,
         Command::Now => commands::search::now(&spotify)?,
         Command::Search { .. } => println!("not yet implemented"),
         Command::Devices => commands::devices::devices(&spotify)?,
