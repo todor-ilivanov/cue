@@ -1,7 +1,24 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rspotify::model::SearchResult;
 use rspotify::prelude::*;
-use rspotify::AuthCodeSpotify;
+use rspotify::{AuthCodeSpotify, ClientError};
+
+fn playback_error(err: ClientError, action: &str) -> anyhow::Error {
+    if let ClientError::Http(ref e) = err {
+        let msg = e.to_string();
+        if msg.contains("status code 404") {
+            return anyhow!(
+                "no active device — use `cue devices` to list devices, then `cue device <name>` to select one"
+            );
+        }
+        if msg.contains("status code 403") {
+            return anyhow!(
+                "cannot {action} — this can happen when playing a single track with no context (try playing an album or playlist instead)"
+            );
+        }
+    }
+    anyhow::Error::from(err).context(format!("failed to {action}"))
+}
 
 pub fn play(spotify: &AuthCodeSpotify, query: &str, album: bool, playlist: bool) -> Result<()> {
     if album {
@@ -50,7 +67,7 @@ fn play_track(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
     let playable = PlayableId::Track(track_id.clone());
     spotify
         .start_uris_playback([playable], None, None, None)
-        .context("failed to start playback")?;
+        .map_err(|e| playback_error(e, "start playback"))?;
 
     println!("Playing: {artists} — {}", track.name);
     Ok(())
@@ -93,7 +110,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
     let context_id = PlayContextId::Album(album_id.clone());
     spotify
         .start_context_playback(context_id, None, None, None)
-        .context("failed to start album playback")?;
+        .map_err(|e| playback_error(e, "start album playback"))?;
 
     println!("Playing album: {} — {artists}", album.name);
     Ok(())
@@ -124,7 +141,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
     let context_id = PlayContextId::Playlist(playlist.id.clone());
     spotify
         .start_context_playback(context_id, None, None, None)
-        .context("failed to start playlist playback")?;
+        .map_err(|e| playback_error(e, "start playlist playback"))?;
 
     println!("Playing playlist: {}", playlist.name);
     Ok(())
@@ -133,7 +150,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
 pub fn pause(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .pause_playback(None)
-        .context("failed to pause playback")?;
+        .map_err(|e| playback_error(e, "pause playback"))?;
     println!("Paused");
     Ok(())
 }
@@ -141,7 +158,7 @@ pub fn pause(spotify: &AuthCodeSpotify) -> Result<()> {
 pub fn resume(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .resume_playback(None, None)
-        .context("failed to resume playback")?;
+        .map_err(|e| playback_error(e, "resume playback"))?;
     println!("Resumed");
     Ok(())
 }
@@ -149,7 +166,7 @@ pub fn resume(spotify: &AuthCodeSpotify) -> Result<()> {
 pub fn next(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .next_track(None)
-        .context("failed to skip to next track")?;
+        .map_err(|e| playback_error(e, "skip to next track"))?;
     println!("Skipped to next track");
     Ok(())
 }
@@ -157,7 +174,7 @@ pub fn next(spotify: &AuthCodeSpotify) -> Result<()> {
 pub fn prev(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .previous_track(None)
-        .context("failed to go to previous track")?;
+        .map_err(|e| playback_error(e, "go to previous track"))?;
     println!("Back to previous track");
     Ok(())
 }
