@@ -10,7 +10,7 @@ fn format_duration_secs(total_secs: i64) -> String {
     format!("{}:{:02}", minutes, seconds)
 }
 
-pub async fn now(spotify: &AuthCodeSpotify) -> Result<()> {
+pub fn now(spotify: &AuthCodeSpotify) -> Result<()> {
     let context = spotify
         .current_playing(None, None::<&[_]>)
         .context("failed to get currently playing track")?;
