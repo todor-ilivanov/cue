@@ -13,25 +13,18 @@ fn format_duration_secs(total_secs: i64) -> String {
 pub async fn now(spotify: &AuthCodeSpotify) -> Result<()> {
     let context = spotify
         .current_playing(None, None::<&[_]>)
-        .context("Failed to get currently playing track")?;
+        .context("failed to get currently playing track")?;
 
-    let context = match context {
-        Some(ctx) => ctx,
+    let item = match context.and_then(|c| c.item.map(|i| (c.progress, i))) {
+        Some(pair) => pair,
         None => {
             println!("Not playing");
             return Ok(());
         }
     };
 
-    let item = match context.item {
-        Some(item) => item,
-        None => {
-            println!("Not playing");
-            return Ok(());
-        }
-    };
-
-    let progress_secs = context.progress.map(|d| d.num_seconds()).unwrap_or(0);
+    let (progress, item) = item;
+    let progress_secs = progress.map(|d| d.num_seconds()).unwrap_or(0);
 
     let (artist, title, duration_secs) = match &item {
         PlayableItem::Track(track) => {
@@ -51,7 +44,7 @@ pub async fn now(spotify: &AuthCodeSpotify) -> Result<()> {
     };
 
     println!(
-        "{} \u{2014} {} [{} / {}]",
+        "{} — {} [{} / {}]",
         artist,
         title,
         format_duration_secs(progress_secs),
