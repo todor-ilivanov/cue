@@ -62,11 +62,10 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let _spotify = client::build_client(auth::load_config()?).await?;
+    let spotify = client::build_client(auth::load_config()?)?;
 
     match cli.command {
         Command::Play { .. } => println!("not yet implemented"),
@@ -74,13 +73,15 @@ async fn main() -> Result<()> {
         Command::Resume => println!("not yet implemented"),
         Command::Next => println!("not yet implemented"),
         Command::Prev => println!("not yet implemented"),
-        Command::Now => println!("not yet implemented"),
+        Command::Now => commands::search::now(&spotify)?,
         Command::Search { .. } => println!("not yet implemented"),
         Command::Devices => println!("not yet implemented"),
         Command::Device { .. } => println!("not yet implemented"),
         Command::Volume { .. } => println!("not yet implemented"),
         Command::Queue { .. } => println!("not yet implemented"),
     }
+
+    client::persist_token(&spotify)?;
 
     Ok(())
 }

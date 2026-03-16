@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rspotify::{
     prelude::{BaseClient, OAuthClient},
     scopes, AuthCodeSpotify, Credentials, OAuth,
@@ -10,7 +10,16 @@ use crate::auth::{self, Config};
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
-pub async fn build_client(config: Config) -> Result<AuthCodeSpotify> {
+fn lock_token(
+    spotify: &AuthCodeSpotify,
+) -> Result<std::sync::MutexGuard<'_, Option<rspotify::Token>>> {
+    spotify
+        .token
+        .lock()
+        .map_err(|_| anyhow!("token lock failed"))
+}
+
+pub fn build_client(config: Config) -> Result<AuthCodeSpotify> {
     let creds = Credentials::new(&config.client_id, &config.client_secret);
     let oauth = OAuth {
         redirect_uri: REDIRECT_URI.to_owned(),
@@ -25,11 +34,11 @@ pub async fn build_client(config: Config) -> Result<AuthCodeSpotify> {
 
     if let Some(token) = auth::load_token()? {
         let expired = token.is_expired();
-        *spotify.token.lock().expect("token mutex poisoned") = Some(token);
+        *lock_token(&spotify)? = Some(token);
         if expired {
             match spotify.refresh_token() {
                 Ok(()) => {
-                    if let Some(t) = spotify.token.lock().expect("token mutex poisoned").as_ref() {
+                    if let Some(t) = lock_token(&spotify)?.as_ref() {
                         auth::save_token(t)?;
                     }
                 }
@@ -53,11 +62,18 @@ pub async fn build_client(config: Config) -> Result<AuthCodeSpotify> {
         .request_token(&code)
         .context("failed to exchange authorization code for token")?;
 
-    if let Some(t) = spotify.token.lock().expect("token mutex poisoned").as_ref() {
+    if let Some(t) = lock_token(&spotify)?.as_ref() {
         auth::save_token(t)?;
     }
 
     Ok(spotify)
+}
+
+pub fn persist_token(spotify: &AuthCodeSpotify) -> Result<()> {
+    if let Some(t) = lock_token(spotify)?.as_ref() {
+        auth::save_token(t)?;
+    }
+    Ok(())
 }
 
 fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
