@@ -53,39 +53,94 @@ pub fn select(prompt: &str, items: &[String]) -> Result<Option<usize>> {
     Ok(selection)
 }
 
-const AUTO_PICK_SCORE_RATIO: f64 = 1.5;
+pub struct PickCandidate {
+    pub name: String,
+    pub label: String,
+    pub popularity: Option<u32>,
+}
 
-/// Fuzzy-rank `labels` against `query`, then auto-pick or show interactive picker.
-/// Returns the original index of the selected item.
-pub fn pick_result(query: &str, labels: Vec<String>, prompt: &str) -> Result<usize> {
-    if labels.is_empty() {
+/// Auto-pick or show interactive picker. Returns the index of the selected candidate.
+pub fn pick_result(
+    query: &str,
+    candidates: Vec<PickCandidate>,
+    prompt: &str,
+    force_pick: bool,
+) -> Result<usize> {
+    if candidates.is_empty() {
         bail!("no results for \"{query}\"");
     }
 
-    let matcher = SkimMatcherV2::default();
-    let mut scored: Vec<(usize, &str, i64)> = labels
+    if candidates.len() == 1 {
+        return Ok(0);
+    }
+
+    if force_pick {
+        return show_picker(query, &candidates, prompt);
+    }
+
+    let query_lower = query.trim().to_lowercase();
+    let lower_names: Vec<String> = candidates.iter().map(|c| c.name.to_lowercase()).collect();
+
+    // Exact match on name
+    let exact: Vec<usize> = lower_names
         .iter()
         .enumerate()
-        .map(|(i, label)| {
-            let score = matcher.fuzzy_match(label, query).unwrap_or(0);
-            (i, label.as_str(), score)
+        .filter(|(_, name)| *name == &query_lower)
+        .map(|(i, _)| i)
+        .collect();
+
+    if !exact.is_empty() {
+        return Ok(most_popular(&candidates, &exact));
+    }
+
+    // Suffix-variant match (query length >= 3)
+    if query_lower.len() >= 3 {
+        let prefix_matches: Vec<usize> = lower_names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| name.starts_with(&query_lower))
+            .map(|(i, _)| i)
+            .collect();
+
+        if !prefix_matches.is_empty() {
+            let all_suffix_variants = prefix_matches.iter().all(|&i| {
+                let rest = &lower_names[i][query_lower.len()..];
+                rest.is_empty() || rest.starts_with(" -") || rest.starts_with(" (")
+            });
+
+            if all_suffix_variants {
+                return Ok(most_popular(&candidates, &prefix_matches));
+            }
+        }
+    }
+
+    show_picker(query, &candidates, prompt)
+}
+
+fn most_popular(candidates: &[PickCandidate], indices: &[usize]) -> usize {
+    *indices
+        .iter()
+        .max_by_key(|&&i| candidates[i].popularity.unwrap_or(0))
+        .unwrap_or(&0)
+}
+
+fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Result<usize> {
+    let matcher = SkimMatcherV2::default();
+    let mut scored: Vec<(usize, i64)> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let score = matcher.fuzzy_match(&c.label, query).unwrap_or(0);
+            (i, score)
         })
         .collect();
 
-    scored.sort_by(|a, b| b.2.cmp(&a.2));
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
 
-    if scored.len() == 1 {
-        return Ok(scored[0].0);
-    }
-
-    let top_score = scored[0].2;
-    let second_score = scored[1].2;
-
-    if second_score == 0 || (top_score as f64 / second_score as f64) > AUTO_PICK_SCORE_RATIO {
-        return Ok(scored[0].0);
-    }
-
-    let sorted_labels: Vec<String> = scored.iter().map(|(_, l, _)| l.to_string()).collect();
+    let sorted_labels: Vec<String> = scored
+        .iter()
+        .map(|&(i, _)| candidates[i].label.clone())
+        .collect();
     match select(prompt, &sorted_labels)? {
         Some(idx) => Ok(scored[idx].0),
         None => Ok(scored[0].0),

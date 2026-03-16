@@ -22,25 +22,25 @@ fn playback_error(err: ClientError, action: &str) -> anyhow::Error {
     anyhow::Error::from(err).context(format!("failed to {action}"))
 }
 
-pub fn play(spotify: &AuthCodeSpotify, query: &str, album: bool, playlist: bool) -> Result<()> {
+pub fn play(
+    spotify: &AuthCodeSpotify,
+    query: &str,
+    album: bool,
+    playlist: bool,
+    force_pick: bool,
+) -> Result<()> {
     if album {
-        play_album(spotify, query)
+        play_album(spotify, query, force_pick)
     } else if playlist {
-        play_playlist(spotify, query)
+        play_playlist(spotify, query, force_pick)
     } else {
-        play_track(spotify, query)
+        play_track(spotify, query, force_pick)
     }
 }
 
-fn join_artist_names(artists: &[rspotify::model::SimplifiedArtist]) -> String {
-    artists
-        .iter()
-        .map(|a| a.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
+use super::join_artist_names;
 
-fn play_track(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
+fn play_track(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
     let result = ui::with_spinner("Searching...", || {
         spotify
             .search(
@@ -59,19 +59,25 @@ fn play_track(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         _ => bail!("unexpected search result type"),
     };
 
-    let valid: Vec<(usize, String)> = tracks
+    let (indices, candidates): (Vec<usize>, Vec<ui::PickCandidate>) = tracks
         .items
         .iter()
         .enumerate()
         .filter_map(|(i, t)| {
             t.id.as_ref()?;
-            Some((i, format!("{} — {}", t.name, join_artist_names(&t.artists))))
+            Some((
+                i,
+                ui::PickCandidate {
+                    name: t.name.clone(),
+                    label: format!("{} — {}", t.name, join_artist_names(&t.artists)),
+                    popularity: Some(t.popularity),
+                },
+            ))
         })
-        .collect();
+        .unzip();
 
-    let labels: Vec<String> = valid.iter().map(|(_, l)| l.clone()).collect();
-    let pick = ui::pick_result(query, labels, "Select a track")?;
-    let idx = valid[pick].0;
+    let pick = ui::pick_result(query, candidates, "Select a track", force_pick)?;
+    let idx = indices[pick];
 
     let track = &tracks.items[idx];
     let track_id = track.id.as_ref().context("track has no ID")?;
@@ -88,7 +94,7 @@ fn play_track(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
     Ok(())
 }
 
-fn play_album(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
+fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
     let result = ui::with_spinner("Searching...", || {
         spotify
             .search(
@@ -107,19 +113,25 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         _ => bail!("unexpected search result type"),
     };
 
-    let valid: Vec<(usize, String)> = albums
+    let (indices, candidates): (Vec<usize>, Vec<ui::PickCandidate>) = albums
         .items
         .iter()
         .enumerate()
         .filter_map(|(i, a)| {
             a.id.as_ref()?;
-            Some((i, format!("{} — {}", a.name, join_artist_names(&a.artists))))
+            Some((
+                i,
+                ui::PickCandidate {
+                    name: a.name.clone(),
+                    label: format!("{} — {}", a.name, join_artist_names(&a.artists)),
+                    popularity: None,
+                },
+            ))
         })
-        .collect();
+        .unzip();
 
-    let labels: Vec<String> = valid.iter().map(|(_, l)| l.clone()).collect();
-    let pick = ui::pick_result(query, labels, "Select an album")?;
-    let idx = valid[pick].0;
+    let pick = ui::pick_result(query, candidates, "Select an album", force_pick)?;
+    let idx = indices[pick];
 
     let album = &albums.items[idx];
     let album_id = album.id.as_ref().context("album has no ID")?;
@@ -136,7 +148,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
     Ok(())
 }
 
-fn play_playlist(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
+fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
     let result = ui::with_spinner("Searching...", || {
         spotify
             .search(
@@ -155,16 +167,20 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         _ => bail!("unexpected search result type"),
     };
 
-    let labels: Vec<String> = playlists
+    let candidates: Vec<ui::PickCandidate> = playlists
         .items
         .iter()
         .map(|p| {
             let owner = p.owner.display_name.as_deref().unwrap_or("unknown");
-            format!("{} — by {owner}", p.name)
+            ui::PickCandidate {
+                name: p.name.clone(),
+                label: format!("{} — by {owner}", p.name),
+                popularity: None,
+            }
         })
         .collect();
 
-    let idx = ui::pick_result(query, labels, "Select a playlist")?;
+    let idx = ui::pick_result(query, candidates, "Select a playlist", force_pick)?;
 
     let playlist = &playlists.items[idx];
 

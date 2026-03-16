@@ -25,6 +25,9 @@ enum Command {
         /// Play a playlist instead of a track
         #[arg(long)]
         playlist: bool,
+        /// Force interactive picker even when auto-pick would match
+        #[arg(short, long)]
+        pick: bool,
     },
     /// Pause playback
     Pause,
@@ -60,6 +63,9 @@ enum Command {
     Queue {
         /// Search query
         query: Vec<String>,
+        /// Force interactive picker even when auto-pick would match
+        #[arg(short, long)]
+        pick: bool,
     },
 }
 
@@ -73,9 +79,10 @@ fn main() -> Result<()> {
             query,
             album,
             playlist,
+            pick,
         } => {
             let query = query.join(" ");
-            commands::play::play(&spotify, &query, album, playlist)?;
+            commands::play::play(&spotify, &query, album, playlist, pick)?;
         }
         Command::Pause => commands::play::pause(&spotify)?,
         Command::Resume => commands::play::resume(&spotify)?,
@@ -92,9 +99,9 @@ fn main() -> Result<()> {
             commands::devices::transfer(&spotify, name.as_deref())?;
         }
         Command::Volume { level } => commands::volume::volume(&spotify, level)?,
-        Command::Queue { query } => {
+        Command::Queue { query, pick } => {
             let query = query.join(" ");
-            commands::queue::queue(&spotify, &query)?;
+            commands::queue::queue(&spotify, &query, pick)?;
         }
     }
 

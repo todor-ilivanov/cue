@@ -3,9 +3,10 @@ use rspotify::model::SearchResult;
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
+use super::join_artist_names;
 use crate::ui;
 
-pub fn queue(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
+pub fn queue(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
     let result = ui::with_spinner("Searching...", || {
         spotify
             .search(
@@ -24,34 +25,29 @@ pub fn queue(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         _ => bail!("unexpected search result type"),
     };
 
-    let valid: Vec<(usize, String)> = tracks
+    let (indices, candidates): (Vec<usize>, Vec<ui::PickCandidate>) = tracks
         .items
         .iter()
         .enumerate()
         .filter_map(|(i, t)| {
             t.id.as_ref()?;
-            let artists = t
-                .artists
-                .iter()
-                .map(|a| a.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Some((i, format!("{} — {artists}", t.name)))
+            Some((
+                i,
+                ui::PickCandidate {
+                    name: t.name.clone(),
+                    label: format!("{} — {}", t.name, join_artist_names(&t.artists)),
+                    popularity: Some(t.popularity),
+                },
+            ))
         })
-        .collect();
+        .unzip();
 
-    let labels: Vec<String> = valid.iter().map(|(_, l)| l.clone()).collect();
-    let pick = ui::pick_result(query, labels, "Select a track to queue")?;
-    let idx = valid[pick].0;
+    let pick = ui::pick_result(query, candidates, "Select a track to queue", force_pick)?;
+    let idx = indices[pick];
 
     let track = &tracks.items[idx];
     let track_id = track.id.as_ref().context("track has no ID")?;
-    let artists = track
-        .artists
-        .iter()
-        .map(|a| a.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let artists = join_artist_names(&track.artists);
 
     ui::with_spinner("Adding to queue...", || {
         let playable = PlayableId::Track(track_id.clone());
