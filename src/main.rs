@@ -66,7 +66,7 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let _config = auth::load_config()?;
+    let _spotify = client::build_client(auth::load_config()?).await?;
 
     match cli.command {
         Command::Play { .. } => println!("not yet implemented"),

@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
+use rspotify::Token;
 use serde::Deserialize;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 const CONFIG_FORMAT: &str =
@@ -18,10 +19,56 @@ struct SpotifyConfig {
     client_secret: String,
 }
 
-#[allow(dead_code)]
 pub struct Config {
     pub client_id: String,
     pub client_secret: String,
+}
+
+pub fn token_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("token.json"))
+}
+
+pub fn load_token() -> Result<Option<Token>> {
+    let path = token_path()?;
+    let contents = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(e).with_context(|| format!("could not read token file: {}", path.display()))
+        }
+    };
+    let token = serde_json::from_str(&contents)
+        .with_context(|| format!("malformed token file: {}", path.display()))?;
+    Ok(Some(token))
+}
+
+pub fn save_token(token: &Token) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let path = token_path()?;
+    let json = serde_json::to_string(token).context("could not serialize token")?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .with_context(|| format!("could not write token file: {}", path.display()))?
+        .write_all(json.as_bytes())
+        .with_context(|| format!("could not write token file: {}", path.display()))
+}
+
+pub fn delete_token() -> Result<()> {
+    let path = token_path()?;
+    fs::remove_file(&path)
+        .or_else(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .with_context(|| format!("could not delete token file: {}", path.display()))
 }
 
 pub fn config_dir() -> Result<PathBuf> {
