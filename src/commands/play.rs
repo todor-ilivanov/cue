@@ -3,6 +3,8 @@ use rspotify::model::SearchResult;
 use rspotify::prelude::*;
 use rspotify::{AuthCodeSpotify, ClientError};
 
+use crate::ui;
+
 fn playback_error(err: ClientError, action: &str) -> anyhow::Error {
     if let ClientError::Http(ref e) = err {
         let msg = e.to_string();
@@ -30,120 +32,154 @@ pub fn play(spotify: &AuthCodeSpotify, query: &str, album: bool, playlist: bool)
     }
 }
 
+fn join_artist_names(artists: &[rspotify::model::SimplifiedArtist]) -> String {
+    artists
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn play_track(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
-    let result = spotify
-        .search(
-            query,
-            rspotify::model::SearchType::Track,
-            None,
-            None,
-            Some(1),
-            None,
-        )
-        .context("failed to search for track")?;
+    let result = ui::with_spinner("Searching...", || {
+        spotify
+            .search(
+                query,
+                rspotify::model::SearchType::Track,
+                None,
+                None,
+                Some(5),
+                None,
+            )
+            .context("failed to search for track")
+    })?;
 
     let tracks = match result {
         SearchResult::Tracks(page) => page,
         _ => bail!("unexpected search result type"),
     };
 
-    let track = match tracks.items.first() {
-        Some(t) => t,
-        None => bail!("no results for \"{query}\""),
-    };
-
-    let track_id = match &track.id {
-        Some(id) => id,
-        None => bail!("track has no ID"),
-    };
-
-    let artists = track
-        .artists
+    let valid: Vec<(usize, String)> = tracks
+        .items
         .iter()
-        .map(|a| a.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+        .enumerate()
+        .filter_map(|(i, t)| {
+            t.id.as_ref()?;
+            Some((i, format!("{} — {}", t.name, join_artist_names(&t.artists))))
+        })
+        .collect();
 
-    let playable = PlayableId::Track(track_id.clone());
-    spotify
-        .start_uris_playback([playable], None, None, None)
-        .map_err(|e| playback_error(e, "start playback"))?;
+    let labels: Vec<String> = valid.iter().map(|(_, l)| l.clone()).collect();
+    let pick = ui::pick_result(query, labels, "Select a track")?;
+    let idx = valid[pick].0;
 
-    println!("Playing: {artists} — {}", track.name);
+    let track = &tracks.items[idx];
+    let track_id = track.id.as_ref().context("track has no ID")?;
+    let artists = join_artist_names(&track.artists);
+
+    ui::with_spinner("Starting playback...", || {
+        let playable = PlayableId::Track(track_id.clone());
+        spotify
+            .start_uris_playback([playable], None, None, None)
+            .map_err(|e| playback_error(e, "start playback"))
+    })?;
+
+    println!("Playing: {}", ui::styled_song(&track.name, &artists));
     Ok(())
 }
 
 fn play_album(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
-    let result = spotify
-        .search(
-            query,
-            rspotify::model::SearchType::Album,
-            None,
-            None,
-            Some(1),
-            None,
-        )
-        .context("failed to search for album")?;
+    let result = ui::with_spinner("Searching...", || {
+        spotify
+            .search(
+                query,
+                rspotify::model::SearchType::Album,
+                None,
+                None,
+                Some(5),
+                None,
+            )
+            .context("failed to search for album")
+    })?;
 
     let albums = match result {
         SearchResult::Albums(page) => page,
         _ => bail!("unexpected search result type"),
     };
 
-    let album = match albums.items.first() {
-        Some(a) => a,
-        None => bail!("no results for \"{query}\""),
-    };
-
-    let album_id = match &album.id {
-        Some(id) => id,
-        None => bail!("album has no ID"),
-    };
-
-    let artists = album
-        .artists
+    let valid: Vec<(usize, String)> = albums
+        .items
         .iter()
-        .map(|a| a.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+        .enumerate()
+        .filter_map(|(i, a)| {
+            a.id.as_ref()?;
+            Some((i, format!("{} — {}", a.name, join_artist_names(&a.artists))))
+        })
+        .collect();
 
-    let context_id = PlayContextId::Album(album_id.clone());
-    spotify
-        .start_context_playback(context_id, None, None, None)
-        .map_err(|e| playback_error(e, "start album playback"))?;
+    let labels: Vec<String> = valid.iter().map(|(_, l)| l.clone()).collect();
+    let pick = ui::pick_result(query, labels, "Select an album")?;
+    let idx = valid[pick].0;
 
-    println!("Playing album: {} — {artists}", album.name);
+    let album = &albums.items[idx];
+    let album_id = album.id.as_ref().context("album has no ID")?;
+    let artists = join_artist_names(&album.artists);
+
+    ui::with_spinner("Starting playback...", || {
+        let context_id = PlayContextId::Album(album_id.clone());
+        spotify
+            .start_context_playback(context_id, None, None, None)
+            .map_err(|e| playback_error(e, "start album playback"))
+    })?;
+
+    println!("Playing album: {}", ui::styled_song(&album.name, &artists));
     Ok(())
 }
 
 fn play_playlist(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
-    let result = spotify
-        .search(
-            query,
-            rspotify::model::SearchType::Playlist,
-            None,
-            None,
-            Some(1),
-            None,
-        )
-        .context("failed to search for playlist")?;
+    let result = ui::with_spinner("Searching...", || {
+        spotify
+            .search(
+                query,
+                rspotify::model::SearchType::Playlist,
+                None,
+                None,
+                Some(5),
+                None,
+            )
+            .context("failed to search for playlist")
+    })?;
 
     let playlists = match result {
         SearchResult::Playlists(page) => page,
         _ => bail!("unexpected search result type"),
     };
 
-    let playlist = match playlists.items.first() {
-        Some(p) => p,
-        None => bail!("no results for \"{query}\""),
-    };
+    let labels: Vec<String> = playlists
+        .items
+        .iter()
+        .map(|p| {
+            let owner = p.owner.display_name.as_deref().unwrap_or("unknown");
+            format!("{} — by {owner}", p.name)
+        })
+        .collect();
 
-    let context_id = PlayContextId::Playlist(playlist.id.clone());
-    spotify
-        .start_context_playback(context_id, None, None, None)
-        .map_err(|e| playback_error(e, "start playlist playback"))?;
+    let idx = ui::pick_result(query, labels, "Select a playlist")?;
 
-    println!("Playing playlist: {}", playlist.name);
+    let playlist = &playlists.items[idx];
+
+    ui::with_spinner("Starting playback...", || {
+        let context_id = PlayContextId::Playlist(playlist.id.clone());
+        spotify
+            .start_context_playback(context_id, None, None, None)
+            .map_err(|e| playback_error(e, "start playlist playback"))
+    })?;
+
+    let owner = playlist.owner.display_name.as_deref().unwrap_or("unknown");
+    println!(
+        "Playing playlist: {}",
+        ui::styled_song(&playlist.name, &format!("by {owner}"))
+    );
     Ok(())
 }
 

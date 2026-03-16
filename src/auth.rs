@@ -42,20 +42,24 @@ pub fn load_token() -> Result<Option<Token>> {
     Ok(Some(token))
 }
 
-pub fn save_token(token: &Token) -> Result<()> {
+fn write_secure_file(path: &std::path::Path, data: &[u8]) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    let path = token_path()?;
-    let json = serde_json::to_string(token).context("could not serialize token")?;
     fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(&path)
-        .with_context(|| format!("could not write token file: {}", path.display()))?
-        .write_all(json.as_bytes())
-        .with_context(|| format!("could not write token file: {}", path.display()))
+        .open(path)
+        .with_context(|| format!("could not write {}", path.display()))?
+        .write_all(data)
+        .with_context(|| format!("could not write {}", path.display()))
+}
+
+pub fn save_token(token: &Token) -> Result<()> {
+    let path = token_path()?;
+    let json = serde_json::to_string(token).context("could not serialize token")?;
+    write_secure_file(&path, json.as_bytes())
 }
 
 pub fn delete_token() -> Result<()> {
@@ -74,6 +78,27 @@ pub fn delete_token() -> Result<()> {
 pub fn config_dir() -> Result<PathBuf> {
     let base = dirs::config_dir().context("could not determine config directory")?;
     Ok(base.join("cue"))
+}
+
+pub fn load_last_device() -> Result<Option<String>> {
+    let path = config_dir()?.join("last_device");
+    match fs::read_to_string(&path) {
+        Ok(s) => {
+            let id = s.trim().to_owned();
+            if id.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(id))
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("could not read last_device: {}", path.display())),
+    }
+}
+
+pub fn save_last_device(device_id: &str) -> Result<()> {
+    let path = config_dir()?.join("last_device");
+    write_secure_file(&path, device_id.as_bytes())
 }
 
 pub fn load_config() -> Result<Config> {

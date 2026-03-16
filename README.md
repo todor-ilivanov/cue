@@ -34,43 +34,48 @@ mkdir -p ~/.config/cue
 Add your credentials to `~/.config/cue/config.toml`:
 
 ```toml
+[spotify]
 client_id = "your_client_id"
 client_secret = "your_client_secret"
 ```
 
 **3. Authenticate:**
 
-Run any command (e.g. `cue devices`). A browser window will open for Spotify OAuth. After authorizing, the token is saved automatically.
+Run any command (e.g. `cue devices`). Your browser will open automatically for Spotify OAuth. After authorizing, the token is saved automatically.
 
 ## Usage
 
 Spotify must be open on at least one device (phone, desktop app, web player). `cue` is a remote control — it doesn't play audio itself.
 
+No quotes needed around multi-word queries. When multiple results match, an interactive picker lets you choose.
+
 ```
-cue play <query>           Play a track
-cue play --album <query>   Play an album
+cue play <query>            Play a track (fuzzy search, interactive pick)
+cue play --album <query>    Play an album
 cue play --playlist <query> Play a playlist
-cue pause                  Pause playback
-cue resume                 Resume playback
-cue next                   Skip to next track
-cue prev                   Go to previous track
-cue now                    Show what's currently playing
-cue search <query>         Search for tracks
-cue search --album <query> Search for albums
-cue devices                List available devices
-cue device <name>          Transfer playback to a device
-cue volume <0-100>         Set volume
-cue queue <query>          Add a track to the queue
+cue pause                   Pause playback
+cue resume                  Resume playback
+cue next                    Skip to next track
+cue prev                    Go to previous track
+cue now                     Show what's currently playing
+cue search <query>          Search for tracks
+cue search --album <query>  Search for albums
+cue devices                 List available devices
+cue device                  Interactive device picker
+cue device <name>           Transfer playback to a device by name
+cue volume <0-100>          Set volume
+cue queue <query>           Add a track to the queue
 ```
 
 ### Example
 
 ```bash
 cue devices
-cue device "MacBook"
-cue play "bohemian rhapsody"
+cue device MacBook
+cue play bohemian rhapsody
 cue now
 cue volume 50
 cue next
-cue queue "another one bites the dust"
+cue queue another one bites the dust
+cue search --album abbey road
 ```

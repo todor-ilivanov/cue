@@ -1,8 +1,31 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use rspotify::model::Device;
 use rspotify::{prelude::OAuthClient, AuthCodeSpotify};
 
+use crate::{auth, ui};
+
+fn fetch_devices(spotify: &AuthCodeSpotify) -> Result<Vec<Device>> {
+    ui::with_spinner("Fetching devices...", || {
+        spotify.device().context("failed to fetch devices")
+    })
+}
+
+fn do_transfer(spotify: &AuthCodeSpotify, device_id: &str, device_name: &str) -> Result<()> {
+    spotify.transfer_playback(device_id, None)?;
+    auth::save_last_device(device_id).ok();
+    println!("Transferred playback to {device_name}");
+    Ok(())
+}
+
+fn require_device_id(device: &Device) -> Result<&str> {
+    match &device.id {
+        Some(id) => Ok(id),
+        None => bail!("device \"{}\" has no ID", device.name),
+    }
+}
+
 pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
-    let devices = spotify.device()?;
+    let devices = fetch_devices(spotify)?;
 
     if devices.is_empty() {
         println!("No devices available");
@@ -10,15 +33,30 @@ pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
     }
 
     for device in &devices {
-        let prefix = if device.is_active { "* " } else { "  " };
-        println!("{prefix}{} ({:?})", device.name, device._type);
+        let name = if device.is_active {
+            if ui::is_interactive() {
+                format!("* {}", console::style(&device.name).bold())
+            } else {
+                format!("* {}", device.name)
+            }
+        } else {
+            format!("  {}", device.name)
+        };
+        println!("{name} ({:?})", device._type);
     }
 
     Ok(())
 }
 
-pub fn transfer(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
-    let devices = spotify.device()?;
+pub fn transfer(spotify: &AuthCodeSpotify, name: Option<&str>) -> Result<()> {
+    match name {
+        Some(n) => transfer_by_name(spotify, n),
+        None => transfer_interactive(spotify),
+    }
+}
+
+fn transfer_by_name(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
+    let devices = fetch_devices(spotify)?;
     let lower = name.to_lowercase();
 
     let device = devices
@@ -27,18 +65,46 @@ pub fn transfer(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
 
     let device = match device {
         Some(d) => d,
-        None => {
-            bail!("no device matching \"{name}\" — run \"cue devices\" to see available devices")
+        None => bail!("no device matching \"{name}\" — run `cue devices` to see available devices"),
+    };
+
+    let device_id = require_device_id(device)?;
+    do_transfer(spotify, device_id, &device.name)
+}
+
+fn transfer_interactive(spotify: &AuthCodeSpotify) -> Result<()> {
+    let devices = fetch_devices(spotify)?;
+
+    if devices.is_empty() {
+        bail!("no devices found — open Spotify on a device first");
+    }
+
+    if devices.len() == 1 {
+        let device_id = require_device_id(&devices[0])?;
+        return do_transfer(spotify, device_id, &devices[0].name);
+    }
+
+    // Check last device
+    if let Ok(Some(last_id)) = auth::load_last_device() {
+        if let Some(device) = devices.iter().find(|d| d.id.as_deref() == Some(&last_id)) {
+            return do_transfer(spotify, &last_id, &device.name);
         }
+    }
+
+    // Interactive picker or fallback
+    let labels: Vec<String> = devices
+        .iter()
+        .map(|d| {
+            let active = if d.is_active { " (active)" } else { "" };
+            format!("{}{active}", d.name)
+        })
+        .collect();
+
+    let idx = match ui::select("Select a device", &labels)? {
+        Some(i) => i,
+        None => devices.iter().position(|d| d.is_active).unwrap_or(0),
     };
 
-    let device_id = match &device.id {
-        Some(id) => id,
-        None => bail!("device \"{}\" has no ID", device.name),
-    };
-
-    spotify.transfer_playback(device_id, None)?;
-    println!("Transferred playback to {}", device.name);
-
-    Ok(())
+    let device_id = require_device_id(&devices[idx])?;
+    do_transfer(spotify, device_id, &devices[idx].name)
 }

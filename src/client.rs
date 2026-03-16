@@ -55,9 +55,17 @@ pub fn build_client(config: Config) -> Result<AuthCodeSpotify> {
     let auth_url = spotify
         .get_authorize_url(false)
         .context("could not build authorization URL")?;
-    eprintln!("Open this URL in your browser to authenticate:\n\n{auth_url}\n");
 
-    let code = wait_for_callback(&spotify)?;
+    let opened = crate::ui::open_browser(&auth_url).unwrap_or(false);
+    if opened {
+        eprintln!("Opened browser for authentication.");
+    } else {
+        eprintln!("Open this URL in your browser to authenticate:\n\n{auth_url}\n");
+    }
+
+    let code = crate::ui::with_spinner("Waiting for authentication...", || {
+        wait_for_callback(&spotify)
+    })?;
     spotify
         .request_token(&code)
         .context("failed to exchange authorization code for token")?;
