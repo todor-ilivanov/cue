@@ -1,7 +1,11 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
+
+const CONFIG_FORMAT: &str =
+    "  [spotify]\n  client_id = \"<your_client_id>\"\n  client_secret = \"<your_client_secret>\"";
 
 #[derive(Deserialize)]
 struct ConfigFile {
@@ -32,19 +36,20 @@ pub fn load_config() -> Result<Config> {
 
     let path = dir.join("config.toml");
 
-    if !path.exists() {
-        bail!(
-            "config file not found: {}\n\nCreate it with:\n\n  [spotify]\n  client_id = \"<your_client_id>\"\n  client_secret = \"<your_client_secret>\"\n\nGet credentials at https://developer.spotify.com/dashboard",
+    let contents = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => bail!(
+            "config file not found: {}\n\nCreate it with:\n\n{CONFIG_FORMAT}\n\nGet credentials at https://developer.spotify.com/dashboard",
             path.display()
-        );
-    }
-
-    let contents = fs::read_to_string(&path)
-        .with_context(|| format!("could not read config file: {}", path.display()))?;
+        ),
+        Err(e) => {
+            return Err(e).with_context(|| format!("could not read config file: {}", path.display()))
+        }
+    };
 
     let file: ConfigFile = toml::from_str(&contents).with_context(|| {
         format!(
-            "malformed config file: {}\n\nExpected format:\n\n  [spotify]\n  client_id = \"<your_client_id>\"\n  client_secret = \"<your_client_secret>\"",
+            "malformed config file: {}\n\nExpected format:\n\n{CONFIG_FORMAT}",
             path.display()
         )
     })?;
