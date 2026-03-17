@@ -12,9 +12,7 @@ Every decision — what to build, what to add, what to leave out — filters thr
 
 These are explicitly out of scope:
 
-- Full TUI framework (no ratatui, no crossterm) — lightweight live views using `console` are OK
 - Direct audio streaming (no librespot)
-- Lyrics display
 - Playlist management (create, edit, delete)
 - Shuffle/repeat toggles
 
@@ -33,6 +31,9 @@ Rust. These crates, and only these:
 | `indicatif` | Spinners during API calls |
 | `console` | Colors, terminal detection |
 | `fuzzy-matcher` | Fuzzy ranking of search results |
+| `chrono` | Duration types for Spotify API seek |
+| `ratatui` | Terminal UI for the player view |
+| `crossterm` | Terminal backend for ratatui |
 
 Do not add dependencies without justification. If the standard library can do it, use the standard library.
 
