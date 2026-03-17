@@ -82,12 +82,8 @@ fn try_exact_match(
         .call();
 
     match resp {
-        Ok(r) => {
-            let body: LrclibResponse = r.into_json().ok()?;
-            Some(response_to_state(body))
-        }
-        Err(ureq::Error::Status(404, _)) => Option::None,
-        Err(_) => Option::None,
+        Ok(r) => r.into_json().ok().map(response_to_state),
+        Err(_) => None,
     }
 }
 
@@ -245,13 +241,9 @@ fn draw_centered_dim(frame: &mut Frame, area: Rect, msg: &str) {
     if area.height == 0 {
         return;
     }
-    let y = area.height / 2;
-    if y >= area.height {
-        return;
-    }
     let centered_area = Rect {
         x: area.x,
-        y: area.y + y,
+        y: area.y + area.height / 2,
         width: area.width,
         height: 1,
     };
@@ -299,13 +291,9 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
 
     // Current line sits at ~1/3 from top.
     let anchor_row = height / 3;
-
-    let active_idx = active.unwrap_or(0);
-    let start_idx = if active.is_some() {
-        active_idx.saturating_sub(anchor_row)
-    } else {
-        0
-    };
+    let start_idx = active
+        .map(|idx| idx.saturating_sub(anchor_row))
+        .unwrap_or(0);
 
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(height);
 
@@ -323,12 +311,10 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
             &lyric.text
         };
 
-        let style = if active == Some(line_idx) {
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else if active.is_some() && line_idx < active.unwrap() {
-            Style::new().fg(Color::DarkGray)
-        } else {
-            Style::new().fg(Color::Gray).add_modifier(Modifier::DIM)
+        let style = match active {
+            Some(ai) if line_idx == ai => Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Some(ai) if line_idx < ai => Style::new().fg(Color::DarkGray),
+            _ => Style::new().fg(Color::Gray).add_modifier(Modifier::DIM),
         };
 
         rendered_lines.push(Line::from(Span::styled(text, style)));

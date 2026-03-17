@@ -114,19 +114,15 @@ fn current_progress_ms(track: &TrackInfo, fetch_anchor: Instant) -> i64 {
     }
 }
 
-fn current_progress(track: &TrackInfo, fetch_anchor: Instant) -> i64 {
-    current_progress_ms(track, fetch_anchor) / 1000
-}
-
 fn draw_playing(
     frame: &mut Frame,
     info: &TrackInfo,
-    progress: i64,
     progress_ms: i64,
     queue: &QueueContext,
     lyrics_state: &LyricsState,
     show_lyrics: bool,
 ) {
+    let progress = progress_ms / 1000;
     let area = frame.area();
     let (prev_count, next_count) = queue_depth(area.height);
 
@@ -440,17 +436,20 @@ fn run_player_loop(
             // Detect track change and trigger lyrics fetch.
             if let Some(ref track) = info {
                 let identity = (
-                    track.title.clone(),
-                    track.artist.clone(),
-                    track.album.clone(),
+                    track.title.as_str(),
+                    track.artist.as_str(),
+                    track.album.as_str(),
                 );
-                if lyrics_track.as_ref() != Some(&identity) {
-                    lyrics_track = Some(identity);
-                    lyrics_state = LyricsState::Loading;
-                    last_lyric_index = None;
+                let stored = lyrics_track
+                    .as_ref()
+                    .map(|(t, a, al)| (t.as_str(), a.as_str(), al.as_str()));
+                if stored != Some(identity) {
                     let title = track.title.clone();
                     let artist = track.artist.clone();
                     let album = track.album.clone();
+                    lyrics_track = Some((title.clone(), artist.clone(), album.clone()));
+                    lyrics_state = LyricsState::Loading;
+                    last_lyric_index = None;
                     let duration = track.duration_secs;
                     let (tx, rx) = mpsc::channel();
                     lyrics_rx = Some(rx);
@@ -480,8 +479,8 @@ fn run_player_loop(
         // Draw
         match &info {
             Some(track) => {
-                let progress = current_progress(track, fetch_anchor);
                 let progress_ms = current_progress_ms(track, fetch_anchor);
+                let progress_secs = progress_ms / 1000;
 
                 // Check if active lyric line changed.
                 if show_lyrics {
@@ -495,13 +494,12 @@ fn run_player_loop(
                     }
                 }
 
-                let state = (progress, track.is_playing);
+                let state = (progress_secs, track.is_playing);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
                     terminal.draw(|frame| {
                         draw_playing(
                             frame,
                             track,
-                            progress,
                             progress_ms,
                             &queue,
                             &lyrics_state,
