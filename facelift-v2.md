@@ -4,40 +4,42 @@
 
 ---
 
-## Improvement 1: Richer Search & Now-Playing Output
+## Improvement 1: Richer Search & Now-Playing Output [Done]
 
 **Goal:** Show album name and release year alongside tracks — more information-dense output without being noisy.
 
-**Files to modify:**
-- `src/commands/mod.rs` — add `release_year()` helper
-- `src/commands/search.rs` — update `search_tracks()`, `search_albums()`, `now()`
+**Files modified:**
+- `src/commands/mod.rs` — added `release_year()` helper
+- `src/commands/search.rs` — updated `search_tracks()`, `search_albums()`, `now()`
 
 ### Changes
 
-**`src/commands/mod.rs`** — add helper:
+**`src/commands/mod.rs`** — added helper:
 ```rust
 pub fn release_year(date: Option<&str>) -> Option<&str> {
     date.and_then(|d| d.get(..4))
 }
 ```
 
-**`search_tracks()`** — two-line format with dim album info:
+**`search_tracks()`** — single-line format with dim album info:
 ```
-  1. Bohemian Rhapsody — Queen
-     A Night at the Opera (1975)
+  1. Bohemian Rhapsody — Queen (A Night at the Opera, 1975)
 ```
-After the existing `println!` for each track, add a second line showing `track.album.name` and the release year (if available). 5-space indent aligns with content after `"  1. "`. Dim-styled when interactive, plain when piped.
+Album name and release year appended inline, dim-styled when interactive, plain when piped. Year omitted if unavailable; entire parenthetical omitted if album name is empty.
 
 **`search_albums()`** — inline year:
 ```
   1. A Night at the Opera — Queen (1975)
 ```
-Append `(year)` dim-styled after the artist. Replace `styled_song` call with inline formatting so the year gets the same dim treatment.
+Year appended dim-styled after the artist. Omitted if no release date.
 
-**`now()`** — extract album name from `FullTrack.album.name`. Display on a second line (used by Improvement 2's progress bar, or standalone if Improvement 2 isn't applied yet). For episodes, skip album line.
+**`now()`** — album name appended inline for tracks (not episodes):
+```
+Bohemian Rhapsody — Queen (A Night at the Opera) [1:23 / 3:45]
+```
 
 ### Verification
-- `cue search bohemian rhapsody` — two-line track results with album + year
+- `cue search bohemian rhapsody` — inline track results with album + year
 - `cue search --album abbey road` — album results with year in parens
 - `cue search bohemian | cat` — same info, no ANSI codes
 - No empty parens when API returns no release_date
