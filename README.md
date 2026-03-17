@@ -7,16 +7,19 @@ A command-line Spotify remote control. It talks to the Spotify Web API to contro
 ```bash
 git clone https://github.com/todor-ilivanov/cue.git
 cd cue
-cargo build --release
+./install.sh
 ```
 
-Optionally, copy the binary to your PATH:
+The install script will walk you through building, installing the binary, configuring Spotify credentials, setting up shell completions, and authenticating.
+
+### Manual install
+
+If you prefer to set things up manually:
 
 ```bash
+cargo build --release
 cp target/release/cue ~/.local/bin/
 ```
-
-## Setup
 
 **1. Create a Spotify app:**
 
