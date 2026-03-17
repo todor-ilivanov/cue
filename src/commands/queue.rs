@@ -93,17 +93,22 @@ pub fn fetch_queue_context(
         .map(playable_song_line)
         .collect();
 
-    let recent = spotify
-        .current_user_recently_played(Some(prev_count as u32), None)
-        .context("failed to get recently played")?;
+    let previous = if prev_count == 0 {
+        Vec::new()
+    } else {
+        let recent = spotify
+            .current_user_recently_played(Some(prev_count as u32), None)
+            .context("failed to get recently played")?;
 
-    let mut previous: Vec<String> = recent
-        .items
-        .iter()
-        .take(prev_count)
-        .map(|h| ui::styled_song(&h.track.name, &join_artist_names(&h.track.artists)))
-        .collect();
-    previous.reverse();
+        let mut items: Vec<String> = recent
+            .items
+            .iter()
+            .take(prev_count)
+            .map(|h| ui::styled_song(&h.track.name, &join_artist_names(&h.track.artists)))
+            .collect();
+        items.reverse();
+        items
+    };
 
     Ok(QueueContext {
         previous,
@@ -119,12 +124,12 @@ pub fn queue_show(spotify: &AuthCodeSpotify) -> Result<()> {
     Ok(())
 }
 
-pub fn print_queue_context(ctx: &QueueContext) {
+fn print_queue_context(ctx: &QueueContext) {
     let interactive = ui::is_interactive();
 
     for line in &ctx.previous {
         if interactive {
-            eprintln!("  {}", console::style(line).dim());
+            println!("  {}", console::style(line).dim());
         } else {
             println!("  {line}");
         }
@@ -144,7 +149,7 @@ pub fn print_queue_context(ctx: &QueueContext) {
 
     for line in &ctx.next {
         if interactive {
-            eprintln!("  {}", console::style(line).dim());
+            println!("  {}", console::style(line).dim());
         } else {
             println!("  {line}");
         }

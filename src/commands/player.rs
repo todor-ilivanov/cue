@@ -5,7 +5,7 @@ use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
 use super::join_artist_names;
-use super::queue::fetch_queue_context;
+use super::queue::{fetch_queue_context, QueueContext};
 use crate::ui;
 
 use std::sync::mpsc;
@@ -21,11 +21,6 @@ struct TrackInfo {
     duration_secs: i64,
     progress_secs: i64,
     is_playing: bool,
-}
-
-struct QueueLines {
-    prev: String,
-    next: String,
 }
 
 /// Restores cursor visibility when dropped.
@@ -78,28 +73,17 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
     }))
 }
 
-fn fetch_queue_lines(spotify: &AuthCodeSpotify) -> QueueLines {
-    let ctx = fetch_queue_context(spotify, 1, 1);
-    match ctx {
-        Ok(ctx) => QueueLines {
-            prev: ctx.previous.into_iter().next().unwrap_or_default(),
-            next: ctx.next.into_iter().next().unwrap_or_default(),
-        },
-        Err(_) => QueueLines {
-            prev: String::new(),
-            next: String::new(),
-        },
-    }
-}
-
-fn draw(term: &Term, info: &TrackInfo, progress: i64, queue: &QueueLines, hints: &str) {
+fn draw(term: &Term, info: &TrackInfo, progress: i64, queue: &QueueContext, hints: &str) {
     let _ = term.clear_last_lines(DRAW_LINES);
 
     // Previous track (dim)
-    if queue.prev.is_empty() {
-        let _ = term.write_line("");
-    } else {
-        let _ = term.write_line(&format!("  {}", console::style(&queue.prev).dim()));
+    match queue.previous.first() {
+        Some(line) => {
+            let _ = term.write_line(&format!("  {}", console::style(line).dim()));
+        }
+        None => {
+            let _ = term.write_line("");
+        }
     }
 
     // Current track
@@ -119,10 +103,13 @@ fn draw(term: &Term, info: &TrackInfo, progress: i64, queue: &QueueLines, hints:
     let _ = term.write_line(&format!("{status}  {bar}"));
 
     // Next track (dim)
-    if queue.next.is_empty() {
-        let _ = term.write_line("");
-    } else {
-        let _ = term.write_line(&format!("  {}", console::style(&queue.next).dim()));
+    match queue.next.first() {
+        Some(line) => {
+            let _ = term.write_line(&format!("  {}", console::style(line).dim()));
+        }
+        None => {
+            let _ = term.write_line("");
+        }
     }
 
     let _ = term.write_line(hints);
@@ -183,9 +170,10 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
     let mut fetch_anchor = Instant::now();
     let mut deferred_fetch: Option<Instant> = None;
     let mut info: Option<TrackInfo> = None;
-    let mut queue = QueueLines {
-        prev: String::new(),
-        next: String::new(),
+    let mut queue = QueueContext {
+        previous: Vec::new(),
+        current: None,
+        next: Vec::new(),
     };
     let mut last_drawn: Option<(i64, bool)> = None;
 
@@ -241,8 +229,10 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
                 fetch_anchor = Instant::now();
                 info = new_info;
                 needs_redraw = true;
+                if let Ok(ctx) = fetch_queue_context(spotify, 1, 1) {
+                    queue = ctx;
+                }
             }
-            queue = fetch_queue_lines(spotify);
             last_fetch = Instant::now();
         }
 
