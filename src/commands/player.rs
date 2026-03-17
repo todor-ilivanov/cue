@@ -4,7 +4,7 @@ use rspotify::model::PlayableItem;
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
-use super::{api_error, join_artist_names};
+use super::join_artist_names;
 use crate::ui;
 
 use std::sync::mpsc;
@@ -18,6 +18,15 @@ struct TrackInfo {
     duration_secs: i64,
     progress_secs: i64,
     is_playing: bool,
+}
+
+/// Restores cursor visibility when dropped.
+struct CursorGuard<'a>(&'a Term);
+
+impl Drop for CursorGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.show_cursor();
+    }
 }
 
 fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
@@ -61,7 +70,7 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
     }))
 }
 
-fn draw(term: &Term, info: &TrackInfo, progress: i64) {
+fn draw(term: &Term, info: &TrackInfo, progress: i64, hints: &str) {
     let _ = term.clear_last_lines(4);
 
     let song_line = ui::styled_song(&info.title, &info.artist);
@@ -77,29 +86,15 @@ fn draw(term: &Term, info: &TrackInfo, progress: i64) {
     let status = if info.is_playing { ">" } else { "||" };
     let _ = term.write_line(&format!("{status}  {bar}"));
 
-    let hints = format!(
-        "{}  {}  {}  {}  {}",
-        console::style("space").bold(),
-        console::style("pause/resume").dim(),
-        console::style("n/p").bold(),
-        console::style("next/prev").dim(),
-        console::style("q quit").dim(),
-    );
-    let _ = term.write_line(&hints);
+    let _ = term.write_line(hints);
 }
 
-fn draw_empty(term: &Term) {
+fn draw_empty(term: &Term, hints: &str) {
     let _ = term.clear_last_lines(4);
     let _ = term.write_line(&format!("{}", console::style("Not playing").dim()));
     let _ = term.write_line("");
     let _ = term.write_line("");
-    let hints = format!(
-        "{}  {}  {}",
-        console::style("r").bold(),
-        console::style("refresh").dim(),
-        console::style("q quit").dim(),
-    );
-    let _ = term.write_line(&hints);
+    let _ = term.write_line(hints);
 }
 
 pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
@@ -109,6 +104,23 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
 
     let term = Term::stderr();
     let _ = term.hide_cursor();
+    let _cursor_guard = CursorGuard(&term);
+
+    // Pre-compute static hint strings
+    let playing_hints = format!(
+        "{}  {}  {}  {}  {}",
+        console::style("space").bold(),
+        console::style("pause/resume").dim(),
+        console::style("n/p").bold(),
+        console::style("next/prev").dim(),
+        console::style("q quit").dim(),
+    );
+    let empty_hints = format!(
+        "{}  {}  {}",
+        console::style("r").bold(),
+        console::style("refresh").dim(),
+        console::style("q quit").dim(),
+    );
 
     // Print initial blank lines so clear_last_lines has something to clear
     for _ in 0..4 {
@@ -128,46 +140,40 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
     let poll_interval = Duration::from_secs(5);
     let mut last_fetch = Instant::now() - poll_interval;
     let mut fetch_anchor = Instant::now();
+    let mut deferred_fetch: Option<Instant> = None;
     let mut info: Option<TrackInfo> = None;
+    let mut last_drawn: Option<(i64, bool)> = None;
 
     loop {
+        let mut needs_redraw = false;
+
         // Process all pending keys
         while let Ok(key) = rx.try_recv() {
             match key {
                 Key::Char('q') | Key::Escape => {
-                    let _ = term.show_cursor();
                     return Ok(());
                 }
                 Key::Char(' ') => {
                     if let Some(ref mut t) = info {
                         if t.is_playing {
-                            let _ = spotify
-                                .pause_playback(None)
-                                .map_err(|e| api_error(e, "pause playback"));
+                            let _ = spotify.pause_playback(None);
                             t.is_playing = false;
                         } else {
-                            let _ = spotify
-                                .resume_playback(None, None)
-                                .map_err(|e| api_error(e, "resume playback"));
+                            let _ = spotify.resume_playback(None, None);
                             t.is_playing = true;
                         }
                         fetch_anchor = Instant::now();
+                        needs_redraw = true;
                     }
                 }
-                Key::Char('n') => {
-                    let _ = spotify
-                        .next_track(None)
-                        .map_err(|e| api_error(e, "skip to next track"));
-                    // Force refetch after a brief delay for Spotify to update
-                    thread::sleep(Duration::from_millis(400));
-                    last_fetch = Instant::now() - poll_interval;
-                }
-                Key::Char('p') => {
-                    let _ = spotify
-                        .previous_track(None)
-                        .map_err(|e| api_error(e, "go to previous track"));
-                    thread::sleep(Duration::from_millis(400));
-                    last_fetch = Instant::now() - poll_interval;
+                Key::Char('n') | Key::Char('p') => {
+                    let _ = if key == Key::Char('n') {
+                        spotify.next_track(None)
+                    } else {
+                        spotify.previous_track(None)
+                    };
+                    deferred_fetch = Some(Instant::now() + Duration::from_millis(400));
+                    needs_redraw = true;
                 }
                 Key::Char('r') => {
                     last_fetch = Instant::now() - poll_interval;
@@ -176,28 +182,39 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
             }
         }
 
+        // Handle deferred fetch (after next/prev)
+        if let Some(at) = deferred_fetch {
+            if Instant::now() >= at {
+                deferred_fetch = None;
+                last_fetch = Instant::now() - poll_interval;
+            }
+        }
+
         // Poll API
         if last_fetch.elapsed() >= poll_interval {
-            match fetch_now_playing(spotify) {
-                Ok(new_info) => {
-                    fetch_anchor = Instant::now();
-                    info = new_info;
-                }
-                Err(_) => {
-                    // Silently skip failed fetches, keep showing last state
-                }
+            if let Ok(new_info) = fetch_now_playing(spotify) {
+                fetch_anchor = Instant::now();
+                info = new_info;
+                needs_redraw = true;
             }
             last_fetch = Instant::now();
         }
 
-        // Draw
+        // Draw (skip if nothing changed)
         match &info {
             Some(track) => {
-                let progress = current_progress(&info, fetch_anchor);
-                draw(&term, track, progress);
+                let progress = current_progress(track, fetch_anchor);
+                let state = (progress, track.is_playing);
+                if needs_redraw || last_drawn.as_ref() != Some(&state) {
+                    draw(&term, track, progress, &playing_hints);
+                    last_drawn = Some(state);
+                }
             }
             None => {
-                draw_empty(&term);
+                if needs_redraw || last_drawn.is_some() {
+                    draw_empty(&term, &empty_hints);
+                    last_drawn = None;
+                }
             }
         }
 
@@ -205,16 +222,11 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
     }
 }
 
-fn current_progress(info: &Option<TrackInfo>, fetch_anchor: Instant) -> i64 {
-    match info {
-        Some(t) => {
-            if t.is_playing {
-                let elapsed = fetch_anchor.elapsed().as_secs() as i64;
-                (t.progress_secs + elapsed).min(t.duration_secs)
-            } else {
-                t.progress_secs
-            }
-        }
-        None => 0,
+fn current_progress(track: &TrackInfo, fetch_anchor: Instant) -> i64 {
+    if track.is_playing {
+        let elapsed = fetch_anchor.elapsed().as_secs() as i64;
+        (track.progress_secs + elapsed).min(track.duration_secs)
+    } else {
+        track.progress_secs
     }
 }
