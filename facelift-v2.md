@@ -171,7 +171,7 @@ Examples:
 
 ---
 
-## Improvement 4: Shell Completions
+## Improvement 4: Shell Completions [Done]
 
 **Goal:** Tab-completable commands and flags via `cue completions <shell>`.
 

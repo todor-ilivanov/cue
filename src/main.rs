@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod auth;
 mod client;
@@ -97,10 +97,25 @@ Examples:
         #[arg(short, long)]
         pick: bool,
     },
+    /// Generate shell completions
+    #[command(after_help = "\
+Examples:
+  cue completions bash >> ~/.bashrc
+  cue completions zsh > ~/.zfunc/_cue
+  cue completions fish > ~/.config/fish/completions/cue.fish")]
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Command::Completions { shell } = &cli.command {
+        clap_complete::generate(*shell, &mut Cli::command(), "cue", &mut std::io::stdout());
+        return Ok(());
+    }
 
     let spotify = client::build_client(auth::load_config()?)?;
 
@@ -133,6 +148,7 @@ fn main() -> Result<()> {
             let query = query.join(" ");
             commands::queue::queue(&spotify, &query, pick)?;
         }
+        Command::Completions { .. } => unreachable!(),
     }
 
     client::persist_token(&spotify)?;
