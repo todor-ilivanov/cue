@@ -179,27 +179,6 @@ pub fn progress_bar(progress_secs: i64, total_secs: i64) -> String {
     format!("{left} {filled_str}{} {right}", style(empty_str).dim())
 }
 
-/// Parse a volume string into an absolute level, given the current volume.
-/// Handles absolute ("50"), relative ("+10", "-10"), and clamping.
-pub fn parse_volume(input: &str, current: u32) -> Result<u8> {
-    let input = input.trim();
-
-    if input.starts_with('+') || input.starts_with('-') {
-        let delta: i32 = input
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid volume adjustment: {input}"))?;
-        return Ok((current as i32 + delta).clamp(0, 100) as u8);
-    }
-
-    let level: u32 = input
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid volume level: {input}"))?;
-    if level > 100 {
-        bail!("volume must be 0-100, got {level}");
-    }
-    Ok(level as u8)
-}
-
 pub fn open_browser(url: &str) -> Result<bool> {
     #[cfg(target_os = "macos")]
     let cmd = "open";
@@ -235,37 +214,6 @@ mod tests {
     #[test]
     fn format_duration_negative_clamps_to_zero() {
         assert_eq!(format_duration(-5), "0:00");
-    }
-
-    #[test]
-    fn parse_volume_absolute() {
-        assert_eq!(parse_volume("50", 0).unwrap(), 50);
-        assert_eq!(parse_volume("0", 80).unwrap(), 0);
-        assert_eq!(parse_volume("100", 0).unwrap(), 100);
-    }
-
-    #[test]
-    fn parse_volume_rejects_over_100() {
-        assert!(parse_volume("101", 0).is_err());
-        assert!(parse_volume("200", 0).is_err());
-    }
-
-    #[test]
-    fn parse_volume_relative() {
-        assert_eq!(parse_volume("+10", 50).unwrap(), 60);
-        assert_eq!(parse_volume("-10", 50).unwrap(), 40);
-    }
-
-    #[test]
-    fn parse_volume_clamps() {
-        assert_eq!(parse_volume("+20", 90).unwrap(), 100);
-        assert_eq!(parse_volume("-20", 10).unwrap(), 0);
-    }
-
-    #[test]
-    fn parse_volume_invalid() {
-        assert!(parse_volume("abc", 0).is_err());
-        assert!(parse_volume("+abc", 0).is_err());
     }
 
     #[test]

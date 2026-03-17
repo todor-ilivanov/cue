@@ -3,7 +3,7 @@ use rspotify::model::SearchResult;
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
-use super::join_artist_names;
+use super::{api_error, join_artist_names};
 use crate::ui;
 
 pub fn queue(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
@@ -53,7 +53,7 @@ pub fn queue(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result
         let playable = PlayableId::Track(track_id.clone());
         spotify
             .add_item_to_queue(playable, None)
-            .map_err(anyhow::Error::from)
+            .map_err(|e| api_error(e, "add track to queue"))
     })?;
 
     println!("Queued: {}", ui::styled_song(&track.name, &artists));
