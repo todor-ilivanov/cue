@@ -25,14 +25,40 @@ struct TrackInfo {
 }
 
 /// How many prev/next queue items to show based on available terminal height.
-/// Fixed rows: track(1) + album(1) + progress(1) + blank(1) + hints(1) = 5
-const FIXED_ROWS: u16 = 5;
+/// Fixed rows always present: track(1) + album(1) + progress(1) + hints(1) = 4.
+/// Each direction with items also adds a 1-row separator.
+const FIXED_ROWS: u16 = 4;
+const MAX_QUEUE_PER_DIRECTION: usize = 3;
 
 fn queue_depth(area_height: u16) -> (usize, usize) {
-    let extra = area_height.saturating_sub(FIXED_ROWS) as usize;
-    // Split extra rows between prev and next, favoring next
-    let next = (extra / 2).min(3);
-    let prev = (extra.saturating_sub(next)).min(3);
+    let available = area_height.saturating_sub(FIXED_ROWS) as usize;
+    // Each direction costs count + 1 separator when count > 0.
+    // Try increasing total items until we run out of space.
+    let mut next = 0;
+    let mut prev = 0;
+    let mut used = 0;
+    // Alternate adding next, then prev
+    loop {
+        if next < MAX_QUEUE_PER_DIRECTION {
+            let cost = if next == 0 { 2 } else { 1 }; // first item includes separator
+            if used + cost > available {
+                break;
+            }
+            next += 1;
+            used += cost;
+        }
+        if prev < MAX_QUEUE_PER_DIRECTION {
+            let cost = if prev == 0 { 2 } else { 1 };
+            if used + cost > available {
+                break;
+            }
+            prev += 1;
+            used += cost;
+        }
+        if next >= MAX_QUEUE_PER_DIRECTION && prev >= MAX_QUEUE_PER_DIRECTION {
+            break;
+        }
+    }
     (prev, next)
 }
 
@@ -352,16 +378,10 @@ fn run_player_loop(
             }
         }
 
-        // Check if terminal size changed queue depth requirements
+        // Track terminal size changes for layout (no API fetch — next poll handles it)
         let current_depth = queue_depth(terminal.size()?.height);
         if current_depth != last_queue_depth {
             last_queue_depth = current_depth;
-            // Re-fetch queue with new depth if we have a track
-            if info.is_some() {
-                if let Ok(ctx) = fetch_queue_context(spotify, current_depth.0, current_depth.1) {
-                    queue = ctx;
-                }
-            }
             needs_redraw = true;
         }
 
@@ -371,8 +391,9 @@ fn run_player_loop(
                 fetch_anchor = Instant::now();
                 info = new_info;
                 needs_redraw = true;
-                let depth = queue_depth(terminal.size()?.height);
-                if let Ok(ctx) = fetch_queue_context(spotify, depth.0, depth.1) {
+                if let Ok(ctx) =
+                    fetch_queue_context(spotify, last_queue_depth.0, last_queue_depth.1)
+                {
                     queue = ctx;
                 }
             }
