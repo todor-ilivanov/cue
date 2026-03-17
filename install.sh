@@ -4,11 +4,9 @@ set -euo pipefail
 # --- Helpers ---
 
 bold=""
-dim=""
 reset=""
 if command -v tput &>/dev/null && [ -t 1 ]; then
     bold=$(tput bold)
-    dim=$(tput setaf 8 2>/dev/null || true)
     reset=$(tput sgr0)
 fi
 
@@ -16,7 +14,6 @@ info()  { echo "${bold}==> $1${reset}"; }
 step()  { echo; info "$1"; }
 warn()  { echo "  warning: $1"; }
 fail()  { echo "  error: $1" >&2; exit 1; }
-quiet() { "$@" >/dev/null 2>&1; }
 
 # --- Prerequisites ---
 
@@ -48,13 +45,10 @@ echo "  Build complete."
 
 step "Installing binary"
 
-binary="$(pwd)/target/release/cue"
-if [ ! -f "$binary" ]; then
-    fail "binary not found at $binary"
-fi
+binary="$PWD/target/release/cue"
 
 default_dir="$HOME/.local/bin"
-if [ -d "$HOME/.cargo/bin" ] && echo "$PATH" | grep -q "$HOME/.cargo/bin"; then
+if [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" == *":$HOME/.cargo/bin:"* ]]; then
     default_dir="$HOME/.cargo/bin"
 fi
 
@@ -67,7 +61,7 @@ cp "$binary" "$install_dir/cue"
 chmod 755 "$install_dir/cue"
 echo "  Installed to $install_dir/cue"
 
-if ! echo "$PATH" | tr ':' '\n' | grep -qx "$install_dir"; then
+if [[ ":$PATH:" != *":$install_dir:"* ]]; then
     warn "$install_dir is not in your PATH"
     echo "  Add it with: export PATH=\"$install_dir:\$PATH\""
 fi
@@ -76,24 +70,24 @@ fi
 
 step "Spotify app setup"
 
-os="$(uname -s)"
-case "$os" in
-    Darwin) config_dir="$HOME/Library/Application Support/cue" ;;
-    *)      config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/cue" ;;
+case "$OSTYPE" in
+    darwin*) config_dir="$HOME/Library/Application Support/cue" ;;
+    *)       config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/cue" ;;
 esac
 
 config_file="$config_dir/config.toml"
+write_config=1
 
 if [ -f "$config_file" ]; then
     echo "  Config already exists: $config_file"
     read -rp "  Overwrite? [y/N] " overwrite
     case "${overwrite:-N}" in
         [Yy]*) ;;
-        *) echo "  Keeping existing config."; skip_config=1 ;;
+        *) echo "  Keeping existing config."; write_config=0 ;;
     esac
 fi
 
-if [ "${skip_config:-0}" != "1" ]; then
+if [ "$write_config" = "1" ]; then
     echo
     echo "  Create a Spotify app to get your credentials:"
     echo "    1. Go to ${bold}https://developer.spotify.com/dashboard${reset}"
@@ -106,10 +100,17 @@ if [ "${skip_config:-0}" != "1" ]; then
     if [ -z "$client_id" ]; then
         fail "Client ID cannot be empty"
     fi
+    if [[ ! "$client_id" =~ ^[a-zA-Z0-9]+$ ]]; then
+        fail "Client ID should contain only alphanumeric characters"
+    fi
 
-    read -rp "  Client Secret: " client_secret
+    read -rsp "  Client Secret: " client_secret
+    echo
     if [ -z "$client_secret" ]; then
         fail "Client Secret cannot be empty"
+    fi
+    if [[ ! "$client_secret" =~ ^[a-zA-Z0-9]+$ ]]; then
+        fail "Client Secret should contain only alphanumeric characters"
     fi
 
     mkdir -p "$config_dir"
@@ -129,9 +130,6 @@ fi
 step "Shell completions"
 
 cue_bin="$install_dir/cue"
-if [ ! -x "$cue_bin" ]; then
-    cue_bin="$binary"
-fi
 
 read -rp "  Generate shell completions? [Y/n] " gen_completions
 case "${gen_completions:-Y}" in
@@ -143,7 +141,7 @@ case "${gen_completions:-Y}" in
         case "$shell_choice" in
             bash)
                 comp_file="$HOME/.local/share/bash-completion/completions/cue"
-                mkdir -p "$(dirname "$comp_file")"
+                mkdir -p "${comp_file%/*}"
                 "$cue_bin" completions bash > "$comp_file"
                 echo "  Written to $comp_file"
                 echo "  Run: source $comp_file"
