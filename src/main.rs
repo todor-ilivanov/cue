@@ -75,15 +75,17 @@ Examples:
         /// Device name (optional — omit for interactive picker)
         name: Option<Vec<String>>,
     },
-    /// Set playback volume (0-100)
+    /// Get or set playback volume (0-100)
     #[command(after_help = "\
 Examples:
+  cue volume
   cue volume 50
-  cue volume 0
-  cue volume 100")]
+  cue volume +10
+  cue volume -10")]
     Volume {
-        /// Volume level (0-100)
-        level: u8,
+        /// Volume level: 0-100, +N, or -N (omit to show current)
+        #[arg(allow_hyphen_values = true)]
+        level: Option<String>,
     },
     /// Add a track to the queue
     #[command(after_help = "\
@@ -143,7 +145,7 @@ fn main() -> Result<()> {
             let name = name.map(|parts| parts.join(" "));
             commands::devices::transfer(&spotify, name.as_deref())?;
         }
-        Command::Volume { level } => commands::volume::volume(&spotify, level)?,
+        Command::Volume { level } => commands::volume::volume(&spotify, level.as_deref())?,
         Command::Queue { query, pick } => {
             let query = query.join(" ");
             commands::queue::queue(&spotify, &query, pick)?;
