@@ -102,7 +102,7 @@ Remove local `format_duration_secs`, use `ui::format_duration` instead.
 
 ---
 
-## Improvement 3: Example-First Help Text
+## Improvement 3: Example-First Help Text [Done]
 
 **Goal:** Add concrete, copy-pasteable usage examples to `--help` output (tldr pattern). New users should understand the tool from help alone.
 
