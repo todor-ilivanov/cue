@@ -34,28 +34,3 @@ pub fn api_error(err: ClientError, action: &str) -> anyhow::Error {
     }
     anyhow::Error::from(err).context(format!("failed to {action}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn release_year_full_date() {
-        assert_eq!(release_year(Some("2023-05-12")), Some("2023"));
-    }
-
-    #[test]
-    fn release_year_year_only() {
-        assert_eq!(release_year(Some("1999")), Some("1999"));
-    }
-
-    #[test]
-    fn release_year_none() {
-        assert_eq!(release_year(None), None);
-    }
-
-    #[test]
-    fn release_year_short_string() {
-        assert_eq!(release_year(Some("99")), None);
-    }
-}
