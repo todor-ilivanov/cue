@@ -89,13 +89,14 @@ Examples:
         #[arg(allow_hyphen_values = true)]
         level: Option<String>,
     },
-    /// Add a track to the queue
+    /// Show the queue or add a track to it
     #[command(after_help = "\
 Examples:
+  cue queue
   cue queue stairway to heaven
   cue queue -p led zeppelin")]
     Queue {
-        /// Search query
+        /// Search query (omit to show current queue)
         query: Vec<String>,
         /// Force interactive picker even when auto-pick would match
         #[arg(short, long)]
@@ -151,7 +152,11 @@ fn main() -> Result<()> {
         Command::Volume { level } => commands::volume::volume(&spotify, level.as_deref())?,
         Command::Queue { query, pick } => {
             let query = query.join(" ");
-            commands::queue::queue(&spotify, &query, pick)?;
+            if query.is_empty() {
+                commands::queue::queue_show(&spotify)?;
+            } else {
+                commands::queue::queue_add(&spotify, &query, pick)?;
+            }
         }
         Command::Completions { .. } => unreachable!(),
     }

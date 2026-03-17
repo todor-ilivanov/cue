@@ -5,11 +5,14 @@ use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
 use super::join_artist_names;
+use super::queue::{fetch_queue_context, QueueContext};
 use crate::ui;
 
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+const DRAW_LINES: usize = 6;
 
 struct TrackInfo {
     title: String,
@@ -70,28 +73,53 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
     }))
 }
 
-fn draw(term: &Term, info: &TrackInfo, progress: i64, hints: &str) {
-    let _ = term.clear_last_lines(4);
+fn draw(term: &Term, info: &TrackInfo, progress: i64, queue: &QueueContext, hints: &str) {
+    let _ = term.clear_last_lines(DRAW_LINES);
 
+    // Previous track (dim)
+    match queue.previous.first() {
+        Some(line) => {
+            let _ = term.write_line(&format!("  {}", console::style(line).dim()));
+        }
+        None => {
+            let _ = term.write_line("");
+        }
+    }
+
+    // Current track
     let song_line = ui::styled_song(&info.title, &info.artist);
     let _ = term.write_line(&song_line);
 
+    // Album
     if !info.album.is_empty() {
         let _ = term.write_line(&format!("{}", console::style(&info.album).dim()));
     } else {
         let _ = term.write_line("");
     }
 
+    // Progress bar
     let bar = ui::progress_bar(progress, info.duration_secs);
     let status = if info.is_playing { ">" } else { "||" };
     let _ = term.write_line(&format!("{status}  {bar}"));
+
+    // Next track (dim)
+    match queue.next.first() {
+        Some(line) => {
+            let _ = term.write_line(&format!("  {}", console::style(line).dim()));
+        }
+        None => {
+            let _ = term.write_line("");
+        }
+    }
 
     let _ = term.write_line(hints);
 }
 
 fn draw_empty(term: &Term, hints: &str) {
-    let _ = term.clear_last_lines(4);
+    let _ = term.clear_last_lines(DRAW_LINES);
+    let _ = term.write_line("");
     let _ = term.write_line(&format!("{}", console::style("Not playing").dim()));
+    let _ = term.write_line("");
     let _ = term.write_line("");
     let _ = term.write_line("");
     let _ = term.write_line(hints);
@@ -123,7 +151,7 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
     );
 
     // Print initial blank lines so clear_last_lines has something to clear
-    for _ in 0..4 {
+    for _ in 0..DRAW_LINES {
         let _ = term.write_line("");
     }
 
@@ -142,6 +170,11 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
     let mut fetch_anchor = Instant::now();
     let mut deferred_fetch: Option<Instant> = None;
     let mut info: Option<TrackInfo> = None;
+    let mut queue = QueueContext {
+        previous: Vec::new(),
+        current: None,
+        next: Vec::new(),
+    };
     let mut last_drawn: Option<(i64, bool)> = None;
 
     loop {
@@ -196,6 +229,9 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
                 fetch_anchor = Instant::now();
                 info = new_info;
                 needs_redraw = true;
+                if let Ok(ctx) = fetch_queue_context(spotify, 1, 1) {
+                    queue = ctx;
+                }
             }
             last_fetch = Instant::now();
         }
@@ -206,7 +242,7 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
                 let progress = current_progress(track, fetch_anchor);
                 let state = (progress, track.is_playing);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
-                    draw(&term, track, progress, &playing_hints);
+                    draw(&term, track, progress, &queue, &playing_hints);
                     last_drawn = Some(state);
                 }
             }
