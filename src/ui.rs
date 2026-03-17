@@ -130,8 +130,11 @@ fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Resul
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let score = matcher.fuzzy_match(&c.label, query).unwrap_or(0);
-            (i, score)
+            let name_score = matcher.fuzzy_match(&c.name, query).unwrap_or(0);
+            let label_score = matcher.fuzzy_match(&c.label, query).unwrap_or(0);
+            let fuzzy_score = name_score.max(label_score);
+            let pop_boost = c.popularity.unwrap_or(0) as i64 * 3;
+            (i, fuzzy_score + pop_boost)
         })
         .collect();
 
@@ -247,6 +250,27 @@ mod tests {
             },
         ];
         assert_eq!(pick_result("creep", candidates, "Pick", false).unwrap(), 0);
+    }
+
+    #[test]
+    fn pick_result_popularity_breaks_tie_for_same_name() {
+        // Both are "Stairway to Heaven" — exact match path picks most popular
+        let candidates = vec![
+            PickCandidate {
+                name: "Stairway to Heaven".to_string(),
+                label: "Stairway to Heaven — Some Cover Artist".to_string(),
+                popularity: Some(20),
+            },
+            PickCandidate {
+                name: "Stairway to Heaven".to_string(),
+                label: "Stairway to Heaven — Led Zeppelin".to_string(),
+                popularity: Some(80),
+            },
+        ];
+        assert_eq!(
+            pick_result("stairway to heaven", candidates, "Pick", false).unwrap(),
+            1
+        );
     }
 
     #[test]

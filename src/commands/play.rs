@@ -106,7 +106,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
                 ui::PickCandidate {
                     name: a.name.clone(),
                     label: format!("{} — {}", a.name, join_artist_names(&a.artists)),
-                    popularity: None,
+                    popularity: Some(5u32.saturating_sub(i as u32) * 20),
                 },
             ))
         })
@@ -152,12 +152,13 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
     let candidates: Vec<ui::PickCandidate> = playlists
         .items
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
             let owner = p.owner.display_name.as_deref().unwrap_or("unknown");
             ui::PickCandidate {
                 name: p.name.clone(),
                 label: format!("{} — by {owner}", p.name),
-                popularity: None,
+                popularity: Some(5u32.saturating_sub(i as u32) * 20),
             }
         })
         .collect();
