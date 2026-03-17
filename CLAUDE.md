@@ -12,7 +12,7 @@ Every decision — what to build, what to add, what to leave out — filters thr
 
 These are explicitly out of scope:
 
-- TUI or interactive terminal UI (no ratatui, no crossterm)
+- Full TUI framework (no ratatui, no crossterm) — lightweight live views using `console` are OK
 - Direct audio streaming (no librespot)
 - Lyrics display
 - Playlist management (create, edit, delete)
@@ -47,6 +47,7 @@ src/
 └── commands/
     ├── mod.rs
     ├── play.rs          # play, pause, resume, next, prev (fuzzy search + interactive select)
+    ├── player.rs        # player (live now-playing view with keyboard controls)
     ├── search.rs        # search, now (styled output)
     ├── devices.rs       # devices, device (smart picker with memory)
     ├── volume.rs        # volume

@@ -1,5 +1,6 @@
 pub mod devices;
 pub mod play;
+pub mod player;
 pub mod queue;
 pub mod search;
 pub mod volume;

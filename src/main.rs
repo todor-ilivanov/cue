@@ -52,6 +52,8 @@ Examples:
     Prev,
     /// Show the currently playing track
     Now,
+    /// Live player with progress bar and keyboard controls
+    Player,
     /// Search for tracks or albums
     #[command(after_help = "\
 Examples:
@@ -136,6 +138,7 @@ fn main() -> Result<()> {
         Command::Next => commands::play::next(&spotify)?,
         Command::Prev => commands::play::prev(&spotify)?,
         Command::Now => commands::search::now(&spotify)?,
+        Command::Player => commands::player::player(&spotify)?,
         Command::Search { query, album } => {
             let query = query.join(" ");
             commands::search::search(&spotify, &query, album)?;
