@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use rspotify::model::Device;
+use rspotify::model::{Device, DeviceType};
 use rspotify::{prelude::OAuthClient, AuthCodeSpotify};
 
 use crate::{auth, ui};
@@ -24,6 +24,24 @@ fn require_device_id(device: &Device) -> Result<&str> {
     }
 }
 
+fn device_type_label(dt: &DeviceType) -> &'static str {
+    match dt {
+        DeviceType::Computer => "computer",
+        DeviceType::Tablet => "tablet",
+        DeviceType::Smartphone => "smartphone",
+        DeviceType::Speaker => "speaker",
+        DeviceType::Tv => "TV",
+        DeviceType::Avr => "AVR",
+        DeviceType::Stb => "STB",
+        DeviceType::AudioDongle => "audio dongle",
+        DeviceType::GameConsole => "game console",
+        DeviceType::CastVideo => "cast video",
+        DeviceType::CastAudio => "cast audio",
+        DeviceType::Automobile => "automobile",
+        _ => "unknown",
+    }
+}
+
 pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
     let devices = fetch_devices(spotify)?;
 
@@ -42,7 +60,7 @@ pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
         } else {
             format!("  {}", device.name)
         };
-        println!("{name} ({:?})", device._type);
+        println!("{name} ({})", device_type_label(&device._type));
     }
 
     Ok(())
@@ -102,7 +120,7 @@ fn transfer_interactive(spotify: &AuthCodeSpotify) -> Result<()> {
 
     let idx = match ui::select("Select a device", &labels)? {
         Some(i) => i,
-        None => devices.iter().position(|d| d.is_active).unwrap_or(0),
+        None => bail!("cancelled"),
     };
 
     let device_id = require_device_id(&devices[idx])?;
