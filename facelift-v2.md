@@ -102,7 +102,7 @@ Remove local `format_duration_secs`, use `ui::format_duration` instead.
 
 ---
 
-## Improvement 3: Example-First Help Text
+## Improvement 3: Example-First Help Text [Done]
 
 **Goal:** Add concrete, copy-pasteable usage examples to `--help` output (tldr pattern). New users should understand the tool from help alone.
 
@@ -171,7 +171,7 @@ Examples:
 
 ---
 
-## Improvement 4: Shell Completions
+## Improvement 4: Shell Completions [Done]
 
 **Goal:** Tab-completable commands and flags via `cue completions <shell>`.
 

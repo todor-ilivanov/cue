@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod auth;
 mod client;
@@ -8,6 +8,13 @@ mod ui;
 
 #[derive(Parser)]
 #[command(name = "cue", about = "A command-line Spotify remote control")]
+#[command(after_help = "\
+Examples:
+  cue play starboy
+  cue play --album dark side of the moon
+  cue now
+  cue volume 50
+  cue device")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -16,6 +23,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Play a track, album, or playlist
+    #[command(after_help = "\
+Examples:
+  cue play starboy
+  cue play --album dark side of the moon
+  cue play --playlist discover weekly
+  cue play -p radiohead")]
     Play {
         /// Search query
         query: Vec<String>,
@@ -40,6 +53,10 @@ enum Command {
     /// Show the currently playing track
     Now,
     /// Search for tracks or albums
+    #[command(after_help = "\
+Examples:
+  cue search bohemian rhapsody
+  cue search --album abbey road")]
     Search {
         /// Search query
         query: Vec<String>,
@@ -50,16 +67,29 @@ enum Command {
     /// List available playback devices
     Devices,
     /// Transfer playback to a device (interactive picker if no name given)
+    #[command(after_help = "\
+Examples:
+  cue device
+  cue device macbook")]
     Device {
         /// Device name (optional — omit for interactive picker)
         name: Option<Vec<String>>,
     },
     /// Set playback volume (0-100)
+    #[command(after_help = "\
+Examples:
+  cue volume 50
+  cue volume 0
+  cue volume 100")]
     Volume {
         /// Volume level (0-100)
         level: u8,
     },
     /// Add a track to the queue
+    #[command(after_help = "\
+Examples:
+  cue queue stairway to heaven
+  cue queue -p led zeppelin")]
     Queue {
         /// Search query
         query: Vec<String>,
@@ -67,10 +97,25 @@ enum Command {
         #[arg(short, long)]
         pick: bool,
     },
+    /// Generate shell completions
+    #[command(after_help = "\
+Examples:
+  cue completions bash >> ~/.bashrc
+  cue completions zsh > ~/.zfunc/_cue
+  cue completions fish > ~/.config/fish/completions/cue.fish")]
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Command::Completions { shell } = &cli.command {
+        clap_complete::generate(*shell, &mut Cli::command(), "cue", &mut std::io::stdout());
+        return Ok(());
+    }
 
     let spotify = client::build_client(auth::load_config()?)?;
 
@@ -103,6 +148,7 @@ fn main() -> Result<()> {
             let query = query.join(" ");
             commands::queue::queue(&spotify, &query, pick)?;
         }
+        Command::Completions { .. } => unreachable!(),
     }
 
     client::persist_token(&spotify)?;
