@@ -1,5 +1,5 @@
-use anyhow::{bail, Context, Result};
-use rspotify::{prelude::OAuthClient, AuthCodeSpotify};
+use anyhow::{anyhow, bail, Context, Result};
+use rspotify::{prelude::OAuthClient, AuthCodeSpotify, ClientError};
 
 use crate::ui;
 
@@ -20,7 +20,7 @@ fn set_volume(spotify: &AuthCodeSpotify, input: &str) -> Result<()> {
     let target = parse_level(spotify, input)?;
 
     ui::with_spinner("Setting volume...", || {
-        spotify.volume(target, None).map_err(anyhow::Error::from)
+        spotify.volume(target, None).map_err(volume_error)
     })?;
     println!("Volume: {target}%");
     Ok(())
@@ -62,4 +62,21 @@ fn parse_level(spotify: &AuthCodeSpotify, input: &str) -> Result<u8> {
         bail!("volume must be 0-100, got {level}");
     }
     Ok(level as u8)
+}
+
+fn volume_error(err: ClientError) -> anyhow::Error {
+    if let ClientError::Http(ref e) = err {
+        let msg = e.to_string();
+        if msg.contains("status code 403") {
+            return anyhow!(
+                "cannot set volume — Spotify Premium is required, or this device does not support volume control"
+            );
+        }
+        if msg.contains("status code 404") {
+            return anyhow!(
+                "no active device — use `cue devices` to list devices, then `cue device <name>` to select one"
+            );
+        }
+    }
+    anyhow::Error::from(err).context("failed to set volume")
 }
