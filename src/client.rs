@@ -87,7 +87,6 @@ pub fn persist_token(spotify: &AuthCodeSpotify) -> Result<()> {
 fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
     let listener = TcpListener::bind("127.0.0.1:8888")
         .context("could not listen on 127.0.0.1:8888 for OAuth callback")?;
-    eprintln!("Waiting for authentication in your browser...");
 
     let (mut stream, _) = listener
         .accept()

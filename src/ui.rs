@@ -143,7 +143,7 @@ fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Resul
         .collect();
     match select(prompt, &sorted_labels)? {
         Some(idx) => Ok(scored[idx].0),
-        None => Ok(scored[0].0),
+        None => bail!("cancelled"),
     }
 }
 
@@ -195,5 +195,77 @@ pub fn open_browser(url: &str) -> Result<bool> {
     {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_duration_basic() {
+        assert_eq!(format_duration(0), "0:00");
+        assert_eq!(format_duration(59), "0:59");
+        assert_eq!(format_duration(60), "1:00");
+        assert_eq!(format_duration(125), "2:05");
+        assert_eq!(format_duration(3661), "61:01");
+    }
+
+    #[test]
+    fn format_duration_negative_clamps_to_zero() {
+        assert_eq!(format_duration(-5), "0:00");
+    }
+
+    #[test]
+    fn pick_result_empty_candidates() {
+        let result = pick_result("test", vec![], "Pick", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pick_result_single_candidate() {
+        let candidates = vec![PickCandidate {
+            name: "Song".to_string(),
+            label: "Song — Artist".to_string(),
+            popularity: Some(50),
+        }];
+        assert_eq!(pick_result("song", candidates, "Pick", false).unwrap(), 0);
+    }
+
+    #[test]
+    fn pick_result_exact_match() {
+        let candidates = vec![
+            PickCandidate {
+                name: "Creep".to_string(),
+                label: "Creep — Radiohead".to_string(),
+                popularity: Some(80),
+            },
+            PickCandidate {
+                name: "Creepy".to_string(),
+                label: "Creepy — Other".to_string(),
+                popularity: Some(20),
+            },
+        ];
+        assert_eq!(pick_result("creep", candidates, "Pick", false).unwrap(), 0);
+    }
+
+    #[test]
+    fn pick_result_exact_match_picks_most_popular() {
+        let candidates = vec![
+            PickCandidate {
+                name: "Starboy".to_string(),
+                label: "Starboy — The Weeknd".to_string(),
+                popularity: Some(40),
+            },
+            PickCandidate {
+                name: "Starboy".to_string(),
+                label: "Starboy — The Weeknd (Deluxe)".to_string(),
+                popularity: Some(90),
+            },
+        ];
+        assert_eq!(
+            pick_result("starboy", candidates, "Pick", false).unwrap(),
+            1
+        );
     }
 }

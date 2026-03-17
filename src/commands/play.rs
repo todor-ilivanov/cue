@@ -1,26 +1,10 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use rspotify::model::SearchResult;
 use rspotify::prelude::*;
-use rspotify::{AuthCodeSpotify, ClientError};
+use rspotify::AuthCodeSpotify;
 
+use super::{api_error, join_artist_names};
 use crate::ui;
-
-fn playback_error(err: ClientError, action: &str) -> anyhow::Error {
-    if let ClientError::Http(ref e) = err {
-        let msg = e.to_string();
-        if msg.contains("status code 404") {
-            return anyhow!(
-                "no active device — use `cue devices` to list devices, then `cue device <name>` to select one"
-            );
-        }
-        if msg.contains("status code 403") {
-            return anyhow!(
-                "cannot {action} — this can happen when playing a single track with no context (try playing an album or playlist instead)"
-            );
-        }
-    }
-    anyhow::Error::from(err).context(format!("failed to {action}"))
-}
 
 pub fn play(
     spotify: &AuthCodeSpotify,
@@ -37,8 +21,6 @@ pub fn play(
         play_track(spotify, query, force_pick)
     }
 }
-
-use super::join_artist_names;
 
 fn play_track(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
     let result = ui::with_spinner("Searching...", || {
@@ -87,7 +69,7 @@ fn play_track(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
         let playable = PlayableId::Track(track_id.clone());
         spotify
             .start_uris_playback([playable], None, None, None)
-            .map_err(|e| playback_error(e, "start playback"))
+            .map_err(|e| api_error(e, "start playback"))
     })?;
 
     println!("Playing: {}", ui::styled_song(&track.name, &artists));
@@ -141,7 +123,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
         let context_id = PlayContextId::Album(album_id.clone());
         spotify
             .start_context_playback(context_id, None, None, None)
-            .map_err(|e| playback_error(e, "start album playback"))
+            .map_err(|e| api_error(e, "start album playback"))
     })?;
 
     println!("Playing album: {}", ui::styled_song(&album.name, &artists));
@@ -188,7 +170,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
         let context_id = PlayContextId::Playlist(playlist.id.clone());
         spotify
             .start_context_playback(context_id, None, None, None)
-            .map_err(|e| playback_error(e, "start playlist playback"))
+            .map_err(|e| api_error(e, "start playlist playback"))
     })?;
 
     let owner = playlist.owner.display_name.as_deref().unwrap_or("unknown");
@@ -202,7 +184,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
 pub fn pause(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .pause_playback(None)
-        .map_err(|e| playback_error(e, "pause playback"))?;
+        .map_err(|e| api_error(e, "pause playback"))?;
     println!("Paused");
     Ok(())
 }
@@ -210,7 +192,7 @@ pub fn pause(spotify: &AuthCodeSpotify) -> Result<()> {
 pub fn resume(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .resume_playback(None, None)
-        .map_err(|e| playback_error(e, "resume playback"))?;
+        .map_err(|e| api_error(e, "resume playback"))?;
     println!("Resumed");
     Ok(())
 }
@@ -218,7 +200,7 @@ pub fn resume(spotify: &AuthCodeSpotify) -> Result<()> {
 pub fn next(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .next_track(None)
-        .map_err(|e| playback_error(e, "skip to next track"))?;
+        .map_err(|e| api_error(e, "skip to next track"))?;
     println!("Skipped to next track");
     Ok(())
 }
@@ -226,7 +208,7 @@ pub fn next(spotify: &AuthCodeSpotify) -> Result<()> {
 pub fn prev(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .previous_track(None)
-        .map_err(|e| playback_error(e, "go to previous track"))?;
+        .map_err(|e| api_error(e, "go to previous track"))?;
     println!("Back to previous track");
     Ok(())
 }
