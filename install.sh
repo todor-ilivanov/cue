@@ -15,6 +15,14 @@ step()  { echo; info "$1"; }
 warn()  { echo "  warning: $1"; }
 fail()  { echo "  error: $1" >&2; exit 1; }
 
+# --- Detect existing installation ---
+
+upgrading=0
+if command -v cue &>/dev/null; then
+    existing_version=$(cue --version 2>/dev/null || echo "unknown")
+    upgrading=1
+fi
+
 # --- Prerequisites ---
 
 step "Checking prerequisites"
@@ -36,7 +44,11 @@ echo "  cargo: $(cargo --version)"
 
 # --- Build ---
 
-step "Building cue"
+if [ "$upgrading" = "1" ]; then
+    step "Upgrading cue (current: $existing_version)"
+else
+    step "Building cue"
+fi
 
 cargo build --release
 echo "  Build complete."
@@ -48,7 +60,10 @@ step "Installing binary"
 binary="$PWD/target/release/cue"
 
 default_dir="$HOME/.local/bin"
-if [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" == *":$HOME/.cargo/bin:"* ]]; then
+if [ "$upgrading" = "1" ]; then
+    existing_path=$(command -v cue)
+    default_dir=$(dirname "$existing_path")
+elif [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" == *":$HOME/.cargo/bin:"* ]]; then
     default_dir="$HOME/.cargo/bin"
 fi
 
@@ -57,6 +72,9 @@ install_dir="${install_dir:-$default_dir}"
 install_dir="${install_dir/#\~/$HOME}"
 
 mkdir -p "$install_dir"
+if [ -f "$install_dir/cue" ]; then
+    echo "  Replacing existing binary at $install_dir/cue"
+fi
 cp "$binary" "$install_dir/cue"
 chmod 755 "$install_dir/cue"
 echo "  Installed to $install_dir/cue"
@@ -80,11 +98,16 @@ write_config=1
 
 if [ -f "$config_file" ]; then
     echo "  Config already exists: $config_file"
-    read -rp "  Overwrite? [y/N] " overwrite
-    case "${overwrite:-N}" in
-        [Yy]*) ;;
-        *) echo "  Keeping existing config."; write_config=0 ;;
-    esac
+    if [ "$upgrading" = "1" ]; then
+        echo "  Keeping existing config."
+        write_config=0
+    else
+        read -rp "  Overwrite? [y/N] " overwrite
+        case "${overwrite:-N}" in
+            [Yy]*) ;;
+            *) echo "  Keeping existing config."; write_config=0 ;;
+        esac
+    fi
 fi
 
 if [ "$write_config" = "1" ]; then
@@ -169,24 +192,33 @@ esac
 
 # --- Authenticate ---
 
-step "Authentication"
+if [ "$upgrading" = "1" ]; then
+    step "Authentication"
+    echo "  Existing auth preserved. Skipping."
+else
+    step "Authentication"
 
-read -rp "  Authenticate with Spotify now? [Y/n] " do_auth
-case "${do_auth:-Y}" in
-    [Yy]*|"")
-        echo "  Running: cue devices"
-        echo "  Your browser will open for Spotify authorization."
-        echo
-        "$cue_bin" devices || warn "Authentication did not complete. Run 'cue devices' later to retry."
-        ;;
-    *)
-        echo "  Skipped. Run any cue command later to trigger authentication."
-        ;;
-esac
+    read -rp "  Authenticate with Spotify now? [Y/n] " do_auth
+    case "${do_auth:-Y}" in
+        [Yy]*|"")
+            echo "  Running: cue devices"
+            echo "  Your browser will open for Spotify authorization."
+            echo
+            "$cue_bin" devices || warn "Authentication did not complete. Run 'cue devices' later to retry."
+            ;;
+        *)
+            echo "  Skipped. Run any cue command later to trigger authentication."
+            ;;
+    esac
+fi
 
 # --- Done ---
 
-step "Setup complete"
+if [ "$upgrading" = "1" ]; then
+    step "Upgrade complete"
+else
+    step "Setup complete"
+fi
 echo
 echo "  Quick start:"
 echo "    cue devices          List available devices"
