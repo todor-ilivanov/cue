@@ -147,6 +147,38 @@ fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Resul
     }
 }
 
+pub fn format_duration(total_secs: i64) -> String {
+    let total_secs = total_secs.max(0);
+    format!("{}:{:02}", total_secs / 60, total_secs % 60)
+}
+
+pub fn progress_bar(progress_secs: i64, total_secs: i64) -> String {
+    let left = format_duration(progress_secs);
+    let right = format_duration(total_secs);
+
+    if !is_interactive() {
+        return format!("[{left} / {right}]");
+    }
+
+    let term_width = console::Term::stderr().size().1 as usize;
+    let label_width = left.len() + right.len() + 3;
+    let bar_width = term_width.saturating_sub(label_width).clamp(10, 50);
+
+    let ratio = if total_secs > 0 {
+        (progress_secs as f64 / total_secs as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let filled = (bar_width as f64 * ratio).round() as usize;
+    let empty = bar_width - filled;
+
+    let filled_str: String = "━".repeat(filled);
+    let empty_str: String = "─".repeat(empty);
+
+    format!("{left} {filled_str}{} {right}", style(empty_str).dim())
+}
+
 pub fn open_browser(url: &str) -> Result<bool> {
     #[cfg(target_os = "macos")]
     let cmd = "open";

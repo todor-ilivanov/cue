@@ -47,7 +47,7 @@ Bohemian Rhapsody — Queen (A Night at the Opera) [1:23 / 3:45]
 
 ---
 
-## Improvement 2: Visual Progress Bar for `cue now`
+## Improvement 2: Visual Progress Bar for `cue now` [Done]
 
 **Goal:** Replace `[1:23 / 3:45]` with a visual progress bar that makes playback state scannable at a glance.
 
