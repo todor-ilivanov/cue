@@ -6,13 +6,6 @@ use rspotify::AuthCodeSpotify;
 use crate::commands::{join_artist_names, release_year};
 use crate::ui;
 
-fn format_duration_secs(total_secs: i64) -> String {
-    let total_secs = total_secs.max(0);
-    let minutes = total_secs / 60;
-    let seconds = total_secs % 60;
-    format!("{}:{:02}", minutes, seconds)
-}
-
 pub fn now(spotify: &AuthCodeSpotify) -> Result<()> {
     let context = ui::with_spinner("Fetching...", || {
         spotify
@@ -45,20 +38,23 @@ pub fn now(spotify: &AuthCodeSpotify) -> Result<()> {
         ),
     };
 
-    let album_suffix = match album_name.filter(|n| !n.is_empty()) {
-        Some(name) if ui::is_interactive() => {
-            console::style(format!(" ({name})")).dim().to_string()
+    if ui::is_interactive() {
+        println!("{}", ui::styled_song(title, &artist));
+        if let Some(name) = album_name.filter(|n| !n.is_empty()) {
+            println!("{}", console::style(name).dim());
         }
-        Some(name) => format!(" ({name})"),
-        None => String::new(),
-    };
-
-    println!(
-        "{}{album_suffix} [{} / {}]",
-        ui::styled_song(title, &artist),
-        format_duration_secs(progress_secs),
-        format_duration_secs(duration_secs)
-    );
+        println!("{}", ui::progress_bar(progress_secs, duration_secs));
+    } else {
+        let album_suffix = match album_name.filter(|n| !n.is_empty()) {
+            Some(name) => format!(" — {name}"),
+            None => String::new(),
+        };
+        println!(
+            "{}{album_suffix} {}",
+            ui::styled_song(title, &artist),
+            ui::progress_bar(progress_secs, duration_secs)
+        );
+    }
 
     Ok(())
 }
