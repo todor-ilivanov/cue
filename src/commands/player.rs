@@ -11,8 +11,10 @@ use rspotify::AuthCodeSpotify;
 
 use super::join_artist_names;
 use super::queue::{fetch_queue_context, QueueContext};
+use crate::lyrics::{self, LyricsState};
 use crate::ui;
 
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 struct TrackInfo {
@@ -20,7 +22,7 @@ struct TrackInfo {
     artist: String,
     album: String,
     duration_secs: i64,
-    progress_secs: i64,
+    progress_ms: i64,
     is_playing: bool,
 }
 
@@ -72,7 +74,7 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
     };
 
     let is_playing = ctx.is_playing;
-    let progress_secs = ctx.progress.map(|d| d.num_seconds()).unwrap_or(0);
+    let progress_ms = ctx.progress.map(|d| d.num_milliseconds()).unwrap_or(0);
 
     let Some(item) = ctx.item else {
         return Ok(None);
@@ -98,21 +100,29 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
         artist,
         album,
         duration_secs,
-        progress_secs,
+        progress_ms,
         is_playing,
     }))
 }
 
-fn current_progress(track: &TrackInfo, fetch_anchor: Instant) -> i64 {
+fn current_progress_ms(track: &TrackInfo, fetch_anchor: Instant) -> i64 {
     if track.is_playing {
-        let elapsed = fetch_anchor.elapsed().as_secs() as i64;
-        (track.progress_secs + elapsed).min(track.duration_secs)
+        let elapsed = fetch_anchor.elapsed().as_millis() as i64;
+        (track.progress_ms + elapsed).min(track.duration_secs * 1000)
     } else {
-        track.progress_secs
+        track.progress_ms
     }
 }
 
-fn draw_playing(frame: &mut Frame, info: &TrackInfo, progress: i64, queue: &QueueContext) {
+fn draw_playing(
+    frame: &mut Frame,
+    info: &TrackInfo,
+    progress_ms: i64,
+    queue: &QueueContext,
+    lyrics_state: &LyricsState,
+    show_lyrics: bool,
+) {
+    let progress = progress_ms / 1000;
     let area = frame.area();
     let (prev_count, next_count) = queue_depth(area.height);
 
@@ -147,7 +157,8 @@ fn draw_playing(frame: &mut Frame, info: &TrackInfo, progress: i64, queue: &Queu
         constraints.push(Constraint::Length(1));
     }
 
-    constraints.push(Constraint::Min(0)); // spacer
+    let lyrics_row = constraints.len();
+    constraints.push(Constraint::Min(0)); // lyrics or spacer
     let hints_row = constraints.len();
     constraints.push(Constraint::Length(1)); // hints
 
@@ -194,6 +205,11 @@ fn draw_playing(frame: &mut Frame, info: &TrackInfo, progress: i64, queue: &Queu
             Style::new().fg(Color::DarkGray),
         ));
         frame.render_widget(Paragraph::new(text), rows[next_start + i]);
+    }
+
+    // Lyrics
+    if show_lyrics {
+        lyrics::draw_lyrics(frame, rows[lyrics_row], lyrics_state, progress_ms as u64);
     }
 
     // Hints
@@ -263,12 +279,14 @@ fn build_hints_playing<'a>() -> Line<'a> {
         Span::styled(" next/prev  ", Style::new().fg(Color::DarkGray)),
         Span::styled("</>", Style::new().add_modifier(Modifier::BOLD)),
         Span::styled(" seek  ", Style::new().fg(Color::DarkGray)),
+        Span::styled("l", Style::new().add_modifier(Modifier::BOLD)),
+        Span::styled(" lyrics  ", Style::new().fg(Color::DarkGray)),
         Span::styled("q", Style::new().fg(Color::DarkGray)),
         Span::styled(" quit", Style::new().fg(Color::DarkGray)),
     ])
 }
 
-pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
+pub fn player(spotify: &AuthCodeSpotify, slim: bool) -> Result<()> {
     if !ui::is_interactive() {
         anyhow::bail!("player requires an interactive terminal");
     }
@@ -285,7 +303,7 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend).context("failed to create terminal")?;
 
-    let result = run_player_loop(&mut terminal, spotify);
+    let result = run_player_loop(&mut terminal, spotify, slim);
 
     // Restore terminal (always, even on error)
     let _ = crossterm::terminal::disable_raw_mode();
@@ -301,6 +319,7 @@ pub fn player(spotify: &AuthCodeSpotify) -> Result<()> {
 fn run_player_loop(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     spotify: &AuthCodeSpotify,
+    slim: bool,
 ) -> Result<()> {
     let poll_interval = Duration::from_secs(5);
     let mut last_fetch = Instant::now() - poll_interval;
@@ -314,6 +333,13 @@ fn run_player_loop(
     };
     let mut last_drawn: Option<(i64, bool)> = None;
     let mut last_queue_depth: (usize, usize) = (0, 0);
+
+    // Lyrics state
+    let mut lyrics_state = LyricsState::None;
+    let mut lyrics_rx: Option<mpsc::Receiver<LyricsState>> = None;
+    let mut lyrics_track: Option<(String, String, String)> = None;
+    let mut show_lyrics = !slim;
+    let mut last_lyric_index: Option<Option<usize>> = None;
 
     loop {
         let mut needs_redraw = false;
@@ -347,16 +373,24 @@ fn run_player_loop(
                     }
                     KeyCode::Left | KeyCode::Right => {
                         if let Some(ref mut t) = info {
-                            let delta = if key.code == KeyCode::Right { 5 } else { -5 };
-                            let current = current_progress(t, fetch_anchor);
-                            let new_pos = (current + delta).clamp(0, t.duration_secs);
-                            let pos_ms = chrono::Duration::milliseconds(new_pos * 1000);
-                            if spotify.seek_track(pos_ms, None).is_ok() {
-                                t.progress_secs = new_pos;
+                            let delta_ms = if key.code == KeyCode::Right {
+                                5000
+                            } else {
+                                -5000
+                            };
+                            let current_ms = current_progress_ms(t, fetch_anchor);
+                            let new_ms = (current_ms + delta_ms).clamp(0, t.duration_secs * 1000);
+                            let pos = chrono::Duration::milliseconds(new_ms);
+                            if spotify.seek_track(pos, None).is_ok() {
+                                t.progress_ms = new_ms;
                                 fetch_anchor = Instant::now();
                                 needs_redraw = true;
                             }
                         }
+                    }
+                    KeyCode::Char('l') => {
+                        show_lyrics = !show_lyrics;
+                        needs_redraw = true;
                     }
                     KeyCode::Char('r') => {
                         last_fetch = Instant::now() - poll_interval;
@@ -398,16 +432,79 @@ fn run_player_loop(
                 }
             }
             last_fetch = Instant::now();
+
+            // Detect track change and trigger lyrics fetch.
+            if let Some(ref track) = info {
+                let identity = (
+                    track.title.as_str(),
+                    track.artist.as_str(),
+                    track.album.as_str(),
+                );
+                let stored = lyrics_track
+                    .as_ref()
+                    .map(|(t, a, al)| (t.as_str(), a.as_str(), al.as_str()));
+                if stored != Some(identity) {
+                    let title = track.title.clone();
+                    let artist = track.artist.clone();
+                    let album = track.album.clone();
+                    lyrics_track = Some((title.clone(), artist.clone(), album.clone()));
+                    lyrics_state = LyricsState::Loading;
+                    last_lyric_index = None;
+                    let duration = track.duration_secs;
+                    let (tx, rx) = mpsc::channel();
+                    lyrics_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let state = lyrics::fetch_lyrics(&title, &artist, &album, duration);
+                        let _ = tx.send(state);
+                    });
+                }
+            }
+        }
+
+        // Check for lyrics fetch result.
+        if let Some(ref rx) = lyrics_rx {
+            match rx.try_recv() {
+                Ok(state) => {
+                    lyrics_state = state;
+                    lyrics_rx = None;
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    lyrics_rx = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
         }
 
         // Draw
         match &info {
             Some(track) => {
-                let progress = current_progress(track, fetch_anchor);
-                let state = (progress, track.is_playing);
+                let progress_ms = current_progress_ms(track, fetch_anchor);
+                let progress_secs = progress_ms / 1000;
+
+                // Check if active lyric line changed.
+                if show_lyrics {
+                    let cur_idx = match &lyrics_state {
+                        LyricsState::Synced(synced) => synced.active_line_index(progress_ms as u64),
+                        _ => None,
+                    };
+                    if last_lyric_index != Some(cur_idx) {
+                        last_lyric_index = Some(cur_idx);
+                        needs_redraw = true;
+                    }
+                }
+
+                let state = (progress_secs, track.is_playing);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
                     terminal.draw(|frame| {
-                        draw_playing(frame, track, progress, &queue);
+                        draw_playing(
+                            frame,
+                            track,
+                            progress_ms,
+                            &queue,
+                            &lyrics_state,
+                            show_lyrics,
+                        );
                     })?;
                     last_drawn = Some(state);
                 }
