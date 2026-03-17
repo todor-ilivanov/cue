@@ -80,9 +80,10 @@ cargo fmt --check        # Format check
 
 ## Auth & config
 
-- Config: `~/.config/cue/config.toml` (client_id, client_secret)
-- Token: `~/.config/cue/token.json` (0600 permissions)
-- Last device: `~/.config/cue/last_device` (0600 permissions, plain text device ID)
+- Config dir: `dirs::config_dir()/cue/` (`~/.config/cue/` on Linux, `~/Library/Application Support/cue/` on macOS)
+- Config: `config.toml` (client_id, client_secret)
+- Token: `token.json` (0600 permissions)
+- Last device: `last_device` (0600 permissions, plain text device ID)
 - OAuth redirect: `http://127.0.0.1:8888/callback`
 - Auth flow: Authorization Code (not PKCE — client secret stays local)
 - Any command with no saved token triggers OAuth automatically

@@ -27,11 +27,14 @@ cp target/release/cue ~/.local/bin/
 
 **2. Create the config file:**
 
-```bash
-mkdir -p ~/.config/cue
-```
+The config directory depends on your OS:
 
-Add your credentials to `~/.config/cue/config.toml`:
+| OS    | Path                                      |
+|-------|-------------------------------------------|
+| Linux | `~/.config/cue/`                          |
+| macOS | `~/Library/Application Support/cue/`      |
+
+Create it and add your credentials to `config.toml`:
 
 ```toml
 [spotify]
