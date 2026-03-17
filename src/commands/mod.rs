@@ -11,3 +11,7 @@ pub fn join_artist_names(artists: &[rspotify::model::SimplifiedArtist]) -> Strin
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+pub fn release_year(date: Option<&str>) -> Option<&str> {
+    date.and_then(|d| d.get(..4))
+}
