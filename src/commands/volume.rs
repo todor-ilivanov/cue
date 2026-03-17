@@ -43,18 +43,10 @@ fn get_volume(spotify: &AuthCodeSpotify) -> Result<u32> {
 fn parse_level(spotify: &AuthCodeSpotify, input: &str) -> Result<u8> {
     let input = input.trim();
 
-    if let Some(delta) = input.strip_prefix('+') {
-        let delta: u32 = delta.parse().context("invalid volume adjustment")?;
-        let current = get_volume(spotify)?;
-        let target = (current + delta).min(100);
-        return Ok(target as u8);
-    }
-
-    if let Some(delta) = input.strip_prefix('-') {
-        let delta: u32 = delta.parse().context("invalid volume adjustment")?;
-        let current = get_volume(spotify)?;
-        let target = current.saturating_sub(delta).min(100);
-        return Ok(target as u8);
+    if input.starts_with('+') || input.starts_with('-') {
+        let delta: i32 = input.parse().context("invalid volume adjustment")?;
+        let current = get_volume(spotify)? as i32;
+        return Ok((current + delta).clamp(0, 100) as u8);
     }
 
     let level: u32 = input.parse().context("invalid volume level")?;
