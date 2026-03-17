@@ -4,6 +4,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 mod auth;
 mod client;
 mod commands;
+mod lyrics;
 mod ui;
 
 #[derive(Parser)]
@@ -53,7 +54,11 @@ Examples:
     /// Show the currently playing track
     Now,
     /// Live player with progress bar and keyboard controls
-    Player,
+    Player {
+        /// Start without lyrics panel
+        #[arg(long)]
+        slim: bool,
+    },
     /// Search for tracks or albums
     #[command(after_help = "\
 Examples:
@@ -139,7 +144,7 @@ fn main() -> Result<()> {
         Command::Next => commands::play::next(&spotify)?,
         Command::Prev => commands::play::prev(&spotify)?,
         Command::Now => commands::search::now(&spotify)?,
-        Command::Player => commands::player::player(&spotify)?,
+        Command::Player { slim } => commands::player::player(&spotify, slim)?,
         Command::Search { query, album } => {
             let query = query.join(" ");
             commands::search::search(&spotify, &query, album)?;
