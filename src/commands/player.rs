@@ -454,7 +454,16 @@ fn run_player_loop(
                     let (tx, rx) = mpsc::channel();
                     lyrics_rx = Some(rx);
                     std::thread::spawn(move || {
-                        let state = lyrics::fetch_lyrics(&title, &artist, &album, duration);
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            lyrics::fetch_lyrics(&title, &artist, &album, duration)
+                        }));
+                        let state = match result {
+                            Ok(s) => s,
+                            Err(_) => {
+                                eprintln!("lyrics: fetch thread panicked");
+                                LyricsState::None
+                            }
+                        };
                         let _ = tx.send(state);
                     });
                 }
@@ -470,7 +479,11 @@ fn run_player_loop(
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    // catch_unwind ensures tx.send() always runs, so this is
+                    // only reachable if panic=abort or the thread is killed.
+                    lyrics_state = LyricsState::None;
                     lyrics_rx = None;
+                    needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }

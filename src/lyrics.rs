@@ -46,6 +46,39 @@ pub enum LyricsState {
 const USER_AGENT: &str = "cue/0.1.0 (https://github.com/cue-rs/cue)";
 const API_BASE: &str = "https://lrclib.net/api";
 
+fn shared_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(build_agent)
+}
+
+fn build_agent() -> ureq::Agent {
+    let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5));
+
+    // Use system certificate store so TLS-intercepting proxies are trusted.
+    let mut root_store = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().certs {
+        let _ = root_store.add(cert);
+    }
+    if !root_store.is_empty() {
+        let tls_config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("ring provider supports default TLS versions")
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+        builder = builder.tls_config(std::sync::Arc::new(tls_config));
+    }
+
+    if let Ok(url) = std::env::var("https_proxy").or_else(|_| std::env::var("HTTPS_PROXY")) {
+        if let Ok(proxy) = ureq::Proxy::new(&url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+
+    builder.build()
+}
+
 #[derive(Deserialize)]
 struct LrclibResponse {
     #[serde(default)]
@@ -57,53 +90,81 @@ struct LrclibResponse {
 }
 
 pub fn fetch_lyrics(title: &str, artist: &str, album: &str, duration_secs: i64) -> LyricsState {
-    if let Some(state) = try_exact_match(title, artist, album, duration_secs) {
+    let agent = shared_agent();
+
+    if let Some(state) = try_exact_match(agent, title, artist, album, duration_secs) {
         return state;
     }
-    if let Some(state) = try_search(title, artist) {
+    if let Some(state) = try_search(agent, title, artist) {
         return state;
     }
     LyricsState::None
 }
 
 fn try_exact_match(
+    agent: &ureq::Agent,
     title: &str,
     artist: &str,
     album: &str,
     duration_secs: i64,
 ) -> Option<LyricsState> {
-    let resp = ureq::get(&format!("{API_BASE}/get"))
+    let resp = agent
+        .get(&format!("{API_BASE}/get"))
         .set("User-Agent", USER_AGENT)
         .query("track_name", title)
         .query("artist_name", artist)
         .query("album_name", album)
         .query("duration", &duration_secs.to_string())
-        .timeout(std::time::Duration::from_secs(5))
         .call();
 
     match resp {
-        Ok(r) => r.into_json().ok().and_then(response_to_state),
-        Err(_) => None,
+        Ok(r) => match r.into_json::<LrclibResponse>() {
+            Ok(parsed) => response_to_state(parsed),
+            Err(e) => {
+                eprintln!("lyrics: failed to parse exact match response: {e}");
+                None
+            }
+        },
+        Err(ureq::Error::Status(404, _)) => None,
+        Err(e) => {
+            eprintln!("lyrics: exact match request failed: {e}");
+            None
+        }
     }
 }
 
-fn try_search(title: &str, artist: &str) -> Option<LyricsState> {
-    let resp = ureq::get(&format!("{API_BASE}/search"))
+fn try_search(agent: &ureq::Agent, title: &str, artist: &str) -> Option<LyricsState> {
+    let resp = match agent
+        .get(&format!("{API_BASE}/search"))
         .set("User-Agent", USER_AGENT)
         .query("track_name", title)
         .query("artist_name", artist)
-        .timeout(std::time::Duration::from_secs(5))
         .call()
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("lyrics: search request failed: {e}");
+            return None;
+        }
+    };
 
-    let results: Vec<LrclibResponse> = resp.into_json().ok()?;
+    let results: Vec<LrclibResponse> = match resp.into_json() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("lyrics: failed to parse search response: {e}");
+            return None;
+        }
+    };
 
     // Prefer the first result with synced lyrics, fall back to plain.
     let mut fallback: Option<LrclibResponse> = None;
 
     for r in results {
         if r.synced_lyrics.is_some() {
-            return response_to_state(r);
+            if let Some(state) = response_to_state(r) {
+                return Some(state);
+            }
+            continue;
         }
         if fallback.is_none() && (r.plain_lyrics.is_some() || r.instrumental) {
             fallback = Some(r);

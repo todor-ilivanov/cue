@@ -21,3 +21,5 @@ crossterm = "0.28"
 ratatui = "0.29"
 toml = "0.8"
 ureq = "2"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = "0.8"
