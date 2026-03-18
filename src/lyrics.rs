@@ -58,7 +58,9 @@ struct LrclibResponse {
 
 pub fn fetch_lyrics(title: &str, artist: &str, album: &str, duration_secs: i64) -> LyricsState {
     if let Some(state) = try_exact_match(title, artist, album, duration_secs) {
-        return state;
+        if !matches!(state, LyricsState::None) {
+            return state;
+        }
     }
     if let Some(state) = try_search(title, artist) {
         return state;
@@ -98,14 +100,19 @@ fn try_search(title: &str, artist: &str) -> Option<LyricsState> {
 
     let results: Vec<LrclibResponse> = resp.into_json().ok()?;
 
-    // Prefer the first result with synced lyrics.
+    // Prefer the first result with synced lyrics, fall back to plain.
+    let mut fallback: Option<LrclibResponse> = None;
+
     for r in results {
         if r.synced_lyrics.is_some() {
             return Some(response_to_state(r));
         }
+        if fallback.is_none() && (r.plain_lyrics.is_some() || r.instrumental) {
+            fallback = Some(r);
+        }
     }
-    // Fall back to first result with any lyrics.
-    None
+
+    fallback.map(response_to_state)
 }
 
 fn response_to_state(resp: LrclibResponse) -> LyricsState {
