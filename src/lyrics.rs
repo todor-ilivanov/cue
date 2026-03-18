@@ -82,7 +82,7 @@ fn try_exact_match(
         .call();
 
     match resp {
-        Ok(r) => r.into_json().ok().map(response_to_state),
+        Ok(r) => r.into_json().ok().and_then(response_to_state),
         Err(_) => None,
     }
 }
@@ -98,32 +98,37 @@ fn try_search(title: &str, artist: &str) -> Option<LyricsState> {
 
     let results: Vec<LrclibResponse> = resp.into_json().ok()?;
 
-    // Prefer the first result with synced lyrics.
+    // Prefer the first result with synced lyrics, fall back to plain.
+    let mut fallback: Option<LrclibResponse> = None;
+
     for r in results {
         if r.synced_lyrics.is_some() {
-            return Some(response_to_state(r));
+            return response_to_state(r);
+        }
+        if fallback.is_none() && (r.plain_lyrics.is_some() || r.instrumental) {
+            fallback = Some(r);
         }
     }
-    // Fall back to first result with any lyrics.
-    None
+
+    fallback.and_then(response_to_state)
 }
 
-fn response_to_state(resp: LrclibResponse) -> LyricsState {
+fn response_to_state(resp: LrclibResponse) -> Option<LyricsState> {
     if resp.instrumental {
-        return LyricsState::Instrumental;
+        return Some(LyricsState::Instrumental);
     }
     if let Some(ref synced) = resp.synced_lyrics {
         let parsed = parse_lrc(synced);
         if !parsed.lines.is_empty() {
-            return LyricsState::Synced(parsed);
+            return Some(LyricsState::Synced(parsed));
         }
     }
     if let Some(plain) = resp.plain_lyrics {
         if !plain.trim().is_empty() {
-            return LyricsState::Plain(plain);
+            return Some(LyricsState::Plain(plain));
         }
     }
-    LyricsState::None
+    None
 }
 
 // ---------------------------------------------------------------------------
