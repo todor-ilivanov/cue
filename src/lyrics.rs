@@ -46,6 +46,11 @@ pub enum LyricsState {
 const USER_AGENT: &str = "cue/0.1.0 (https://github.com/cue-rs/cue)";
 const API_BASE: &str = "https://lrclib.net/api";
 
+fn shared_agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(build_agent)
+}
+
 fn build_agent() -> ureq::Agent {
     let mut builder = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5));
 
@@ -85,12 +90,12 @@ struct LrclibResponse {
 }
 
 pub fn fetch_lyrics(title: &str, artist: &str, album: &str, duration_secs: i64) -> LyricsState {
-    let agent = build_agent();
+    let agent = shared_agent();
 
-    if let Some(state) = try_exact_match(&agent, title, artist, album, duration_secs) {
+    if let Some(state) = try_exact_match(agent, title, artist, album, duration_secs) {
         return state;
     }
-    if let Some(state) = try_search(&agent, title, artist) {
+    if let Some(state) = try_search(agent, title, artist) {
         return state;
     }
     LyricsState::None

@@ -479,6 +479,8 @@ fn run_player_loop(
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    // catch_unwind ensures tx.send() always runs, so this is
+                    // only reachable if panic=abort or the thread is killed.
                     lyrics_state = LyricsState::None;
                     lyrics_rx = None;
                     needs_redraw = true;
