@@ -5,6 +5,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use serde::Deserialize;
 
+const ACCENT: Color = Color::Rgb(255, 191, 0);
+const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -283,22 +286,57 @@ fn parse_timestamp(tag: &str) -> Option<u64> {
 // Lyrics widget
 // ---------------------------------------------------------------------------
 
+fn build_lyrics_separator(width: u16) -> Line<'static> {
+    let label = " lyrics ";
+    let remaining = (width as usize).saturating_sub(label.len());
+    let left = remaining / 2;
+    let right = remaining - left;
+    Line::from(vec![
+        Span::styled("─".repeat(left), Style::new().fg(SEPARATOR_COLOR)),
+        Span::styled(
+            label,
+            Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ),
+        Span::styled("─".repeat(right), Style::new().fg(SEPARATOR_COLOR)),
+    ])
+}
+
 pub fn draw_lyrics(frame: &mut Frame, area: Rect, state: &LyricsState, position_ms: u64) {
+    if area.height < 2 {
+        return;
+    }
+
+    // Render separator header
+    let sep_area = Rect { height: 1, ..area };
+    frame.render_widget(Paragraph::new(build_lyrics_separator(area.width)), sep_area);
+
+    // Content area below separator (+ 1 blank line for breathing room)
+    let content_y_offset = if area.height > 4 { 2 } else { 1 };
+    let content_area = Rect {
+        y: area.y + content_y_offset,
+        height: area.height.saturating_sub(content_y_offset),
+        ..area
+    };
+
+    if content_area.height == 0 {
+        return;
+    }
+
     match state {
         LyricsState::Loading => {
-            draw_centered_dim(frame, area, "Loading lyrics...");
+            draw_centered_dim(frame, content_area, "Loading lyrics...");
         }
         LyricsState::None => {
-            draw_centered_dim(frame, area, "No lyrics available");
+            draw_centered_dim(frame, content_area, "No lyrics available");
         }
         LyricsState::Instrumental => {
-            draw_centered_dim(frame, area, "Instrumental");
+            draw_centered_dim(frame, content_area, "Instrumental");
         }
         LyricsState::Plain(text) => {
-            draw_plain(frame, area, text);
+            draw_plain(frame, content_area, text);
         }
         LyricsState::Synced(synced) => {
-            draw_synced(frame, area, synced, position_ms);
+            draw_synced(frame, content_area, synced, position_ms);
         }
     }
 }
@@ -355,8 +393,8 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
 
     let active = synced.active_line_index(position_ms);
 
-    // Current line sits at ~1/3 from top.
-    let anchor_row = height / 3;
+    // Center the active line vertically
+    let anchor_row = height / 2;
     let start_idx = active
         .map(|idx| idx.saturating_sub(anchor_row))
         .unwrap_or(0);
@@ -378,7 +416,7 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
         };
 
         let style = match active {
-            Some(ai) if line_idx == ai => Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Some(ai) if line_idx == ai => Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
             Some(ai) if line_idx < ai => Style::new().fg(Color::DarkGray),
             _ => Style::new().fg(Color::Gray).add_modifier(Modifier::DIM),
         };
