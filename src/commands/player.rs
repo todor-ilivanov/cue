@@ -17,6 +17,11 @@ use crate::ui;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+// Amber/gold accent palette
+const ACCENT: Color = Color::Rgb(255, 191, 0);
+const ACCENT_DIM: Color = Color::Rgb(153, 115, 0);
+const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
+
 struct TrackInfo {
     title: String,
     artist: String,
@@ -28,7 +33,7 @@ struct TrackInfo {
 
 /// How many prev/next queue items to show based on available terminal height.
 /// Fixed rows always present: track(1) + album(1) + progress(1) + hints(1) = 4.
-/// Each direction with items also adds a 1-row separator.
+/// Each direction with items also adds a 1-row separator line.
 const FIXED_ROWS: u16 = 4;
 const MAX_QUEUE_PER_DIRECTION: usize = 3;
 
@@ -114,6 +119,13 @@ fn current_progress_ms(track: &TrackInfo, fetch_anchor: Instant) -> i64 {
     }
 }
 
+fn build_separator(width: u16) -> Line<'static> {
+    Line::from(Span::styled(
+        "─".repeat(width as usize),
+        Style::new().fg(SEPARATOR_COLOR),
+    ))
+}
+
 fn draw_playing(
     frame: &mut Frame,
     info: &TrackInfo,
@@ -124,32 +136,53 @@ fn draw_playing(
 ) {
     let progress = progress_ms / 1000;
     let area = frame.area();
-    let (prev_count, next_count) = queue_depth(area.height);
+    let height = area.height;
+    let width = area.width;
+
+    let compact = height < 10;
+    let show_album = !compact;
+    let show_top_margin = height > 12;
+    let show_queue = height >= 8;
+
+    let (prev_count, next_count) = if show_queue {
+        queue_depth(area.height)
+    } else {
+        (0, 0)
+    };
 
     let mut constraints: Vec<Constraint> = Vec::new();
+
+    // Top margin for breathing room
+    if show_top_margin {
+        constraints.push(Constraint::Length(1));
+    }
 
     // Previous tracks
     for _ in 0..prev_count {
         constraints.push(Constraint::Length(1));
     }
-    // Blank separator after prev tracks (only if we have prev tracks)
-    if prev_count > 0 {
-        constraints.push(Constraint::Length(1));
-    }
+
+    // Separator line above now-playing card
+    let sep_above_row = constraints.len();
+    constraints.push(Constraint::Length(1));
 
     let track_row = constraints.len();
     constraints.push(Constraint::Length(1)); // current track
 
-    let album_row = constraints.len();
-    constraints.push(Constraint::Length(1)); // album
+    let album_row = if show_album {
+        let r = constraints.len();
+        constraints.push(Constraint::Length(1)); // album
+        Some(r)
+    } else {
+        None
+    };
 
     let progress_row = constraints.len();
     constraints.push(Constraint::Length(1)); // progress bar
 
-    // Blank separator before next tracks (only if we have next tracks)
-    if next_count > 0 {
-        constraints.push(Constraint::Length(1));
-    }
+    // Separator line below now-playing card
+    let sep_below_row = constraints.len();
+    constraints.push(Constraint::Length(1));
 
     // Next tracks
     let next_start = constraints.len();
@@ -166,28 +199,34 @@ fn draw_playing(
 
     // Previous tracks (dim, oldest first)
     let prev_items: Vec<&String> = queue.previous.iter().rev().take(prev_count).collect();
+    let prev_offset = if show_top_margin { 1 } else { 0 };
     for (i, line) in prev_items.iter().rev().enumerate() {
         let text = Line::from(Span::styled(
             format!("  {line}"),
             Style::new().fg(Color::DarkGray),
         ));
-        frame.render_widget(Paragraph::new(text), rows[i]);
+        frame.render_widget(Paragraph::new(text), rows[prev_offset + i]);
     }
 
-    // Current track
+    // Separator above now-playing
+    frame.render_widget(Paragraph::new(build_separator(width)), rows[sep_above_row]);
+
+    // Current track — amber title, subtle artist
     let track_line = Line::from(vec![
         Span::styled(
             &info.title,
-            Style::new().add_modifier(Modifier::BOLD).fg(Color::White),
+            Style::new().add_modifier(Modifier::BOLD).fg(ACCENT),
         ),
-        Span::styled(" — ", Style::new().fg(Color::DarkGray)),
-        Span::styled(&info.artist, Style::new().fg(Color::DarkGray)),
+        Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)),
+        Span::styled(&info.artist, Style::new().fg(Color::Gray)),
     ]);
     frame.render_widget(Paragraph::new(track_line), rows[track_row]);
 
     // Album
-    let album_line = Line::from(Span::styled(&info.album, Style::new().fg(Color::DarkGray)));
-    frame.render_widget(Paragraph::new(album_line), rows[album_row]);
+    if let Some(ar) = album_row {
+        let album_line = Line::from(Span::styled(&info.album, Style::new().fg(Color::DarkGray)));
+        frame.render_widget(Paragraph::new(album_line), rows[ar]);
+    }
 
     // Progress bar
     let progress_line = build_progress_line(
@@ -197,6 +236,9 @@ fn draw_playing(
         rows[progress_row],
     );
     frame.render_widget(Paragraph::new(progress_line), rows[progress_row]);
+
+    // Separator below now-playing
+    frame.render_widget(Paragraph::new(build_separator(width)), rows[sep_below_row]);
 
     // Next tracks
     for (i, line) in queue.next.iter().take(next_count).enumerate() {
@@ -213,7 +255,7 @@ fn draw_playing(
     }
 
     // Hints
-    let hints = build_hints_playing();
+    let hints = build_hints_playing(width);
     frame.render_widget(Paragraph::new(hints), rows[hints_row]);
 }
 
@@ -234,22 +276,29 @@ fn draw_empty(frame: &mut Frame) {
     ));
     frame.render_widget(Paragraph::new(msg), rows[1]);
 
+    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
     let hints = Line::from(vec![
-        Span::styled("r", Style::new().add_modifier(Modifier::BOLD)),
-        Span::styled(" refresh  ", Style::new().fg(Color::DarkGray)),
-        Span::styled("q", Style::new().fg(Color::DarkGray)),
-        Span::styled(" quit", Style::new().fg(Color::DarkGray)),
+        Span::styled("r", key_style),
+        Span::styled(" refresh  ", desc_style),
+        Span::styled("q", key_style),
+        Span::styled(" quit", desc_style),
     ]);
     frame.render_widget(Paragraph::new(hints), rows[3]);
 }
 
+// Fractional block characters for smooth progress bar (eighths: 1/8 to 7/8)
+const BLOCK_EIGHTHS: [char; 8] = [
+    ' ', '\u{258f}', '\u{258e}', '\u{258d}', '\u{258c}', '\u{258b}', '\u{258a}', '\u{2589}',
+];
+
 fn build_progress_line<'a>(progress: i64, duration: i64, is_playing: bool, area: Rect) -> Line<'a> {
-    let status = if is_playing { ">" } else { "||" };
+    let status = if is_playing { "\u{25b6}" } else { "\u{23f8}" };
     let left = ui::format_duration(progress);
     let right = ui::format_duration(duration);
 
-    let label_width = status.len() + 2 + left.len() + 1 + right.len() + 1;
-    let bar_width = (area.width as usize).saturating_sub(label_width).min(50);
+    let label_width = 2 + 1 + left.len() + 1 + right.len() + 1; // status + gaps + times
+    let bar_width = (area.width as usize).saturating_sub(label_width);
 
     let ratio = if duration > 0 {
         (progress as f64 / duration as f64).clamp(0.0, 1.0)
@@ -257,33 +306,64 @@ fn build_progress_line<'a>(progress: i64, duration: i64, is_playing: bool, area:
         0.0
     };
 
-    let filled = (bar_width as f64 * ratio).round() as usize;
-    let empty = bar_width.saturating_sub(filled);
+    // Sub-character precision using fractional blocks
+    let total_eighths = (bar_width as f64 * 8.0 * ratio).round() as usize;
+    let full_blocks = total_eighths / 8;
+    let remainder = total_eighths % 8;
 
-    let filled_str: String = "━".repeat(filled);
-    let empty_str: String = "─".repeat(empty);
+    let filled_str: String = "\u{2588}".repeat(full_blocks);
+    let frac_char = if remainder > 0 && full_blocks < bar_width {
+        BLOCK_EIGHTHS[remainder].to_string()
+    } else {
+        String::new()
+    };
+    let empty_count = bar_width.saturating_sub(full_blocks + if remainder > 0 { 1 } else { 0 });
+    let empty_str: String = " ".repeat(empty_count);
 
     Line::from(vec![
-        Span::raw(format!("{status}  {left} ")),
-        Span::raw(filled_str),
-        Span::styled(empty_str, Style::new().fg(Color::DarkGray)),
-        Span::raw(format!(" {right}")),
+        Span::styled(format!("{status} "), Style::new().fg(ACCENT)),
+        Span::styled(left, Style::new().fg(Color::White)),
+        Span::raw(" "),
+        Span::styled(filled_str, Style::new().fg(ACCENT)),
+        Span::styled(frac_char, Style::new().fg(ACCENT_DIM)),
+        Span::styled(empty_str, Style::new().fg(SEPARATOR_COLOR)),
+        Span::raw(" "),
+        Span::styled(right, Style::new().fg(Color::DarkGray)),
     ])
 }
 
-fn build_hints_playing<'a>() -> Line<'a> {
-    Line::from(vec![
-        Span::styled("space", Style::new().add_modifier(Modifier::BOLD)),
-        Span::styled(" pause/resume  ", Style::new().fg(Color::DarkGray)),
-        Span::styled("n/p", Style::new().add_modifier(Modifier::BOLD)),
-        Span::styled(" next/prev  ", Style::new().fg(Color::DarkGray)),
-        Span::styled("</>", Style::new().add_modifier(Modifier::BOLD)),
-        Span::styled(" seek  ", Style::new().fg(Color::DarkGray)),
-        Span::styled("l", Style::new().add_modifier(Modifier::BOLD)),
-        Span::styled(" lyrics  ", Style::new().fg(Color::DarkGray)),
-        Span::styled("q", Style::new().fg(Color::DarkGray)),
-        Span::styled(" quit", Style::new().fg(Color::DarkGray)),
-    ])
+fn build_hints_playing(width: u16) -> Line<'static> {
+    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
+
+    if width < 60 {
+        // Compact hints for narrow terminals
+        Line::from(vec![
+            Span::styled("spc", key_style),
+            Span::styled(" \u{23ef}  ", desc_style),
+            Span::styled("n/p", key_style),
+            Span::styled(" \u{23ed}/\u{23ee}  ", desc_style),
+            Span::styled("\u{2190}/\u{2192}", key_style),
+            Span::styled(" seek  ", desc_style),
+            Span::styled("l", key_style),
+            Span::styled(" lrc  ", desc_style),
+            Span::styled("q", key_style),
+            Span::styled(" quit", desc_style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("space", key_style),
+            Span::styled(" pause/resume  ", desc_style),
+            Span::styled("n/p", key_style),
+            Span::styled(" next/prev  ", desc_style),
+            Span::styled("</>", key_style),
+            Span::styled(" seek  ", desc_style),
+            Span::styled("l", key_style),
+            Span::styled(" lyrics  ", desc_style),
+            Span::styled("q", key_style),
+            Span::styled(" quit", desc_style),
+        ])
+    }
 }
 
 pub fn player(spotify: &AuthCodeSpotify, slim: bool) -> Result<()> {
@@ -493,7 +573,8 @@ fn run_player_loop(
         match &info {
             Some(track) => {
                 let progress_ms = current_progress_ms(track, fetch_anchor);
-                let progress_secs = progress_ms / 1000;
+                // 250ms granularity for smooth progress bar updates
+                let progress_tick = progress_ms / 250;
 
                 // Check if active lyric line changed.
                 if show_lyrics {
@@ -507,7 +588,7 @@ fn run_player_loop(
                     }
                 }
 
-                let state = (progress_secs, track.is_playing);
+                let state = (progress_tick, track.is_playing);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
                     terminal.draw(|frame| {
                         draw_playing(
@@ -530,6 +611,6 @@ fn run_player_loop(
             }
         }
 
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
