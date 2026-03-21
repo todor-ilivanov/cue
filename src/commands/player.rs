@@ -29,6 +29,7 @@ struct TrackInfo {
     duration_secs: i64,
     progress_ms: i64,
     is_playing: bool,
+    volume_percent: Option<u32>,
 }
 
 /// How many prev/next queue items to show based on available terminal height.
@@ -71,8 +72,8 @@ fn queue_depth(area_height: u16) -> (usize, usize) {
 
 fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
     let context = spotify
-        .current_playing(None, None::<&[_]>)
-        .context("failed to get currently playing track")?;
+        .current_playback(None, None::<&[_]>)
+        .context("failed to get current playback")?;
 
     let Some(ctx) = context else {
         return Ok(None);
@@ -80,6 +81,7 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
 
     let is_playing = ctx.is_playing;
     let progress_ms = ctx.progress.map(|d| d.num_milliseconds()).unwrap_or(0);
+    let volume_percent = ctx.device.volume_percent;
 
     let Some(item) = ctx.item else {
         return Ok(None);
@@ -107,6 +109,7 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
         duration_secs,
         progress_ms,
         is_playing,
+        volume_percent,
     }))
 }
 
@@ -233,6 +236,7 @@ fn draw_playing(
         progress,
         info.duration_secs,
         info.is_playing,
+        info.volume_percent,
         rows[progress_row],
     );
     frame.render_widget(Paragraph::new(progress_line), rows[progress_row]);
@@ -292,12 +296,19 @@ const BLOCK_EIGHTHS: [char; 8] = [
     ' ', '\u{258f}', '\u{258e}', '\u{258d}', '\u{258c}', '\u{258b}', '\u{258a}', '\u{2589}',
 ];
 
-fn build_progress_line<'a>(progress: i64, duration: i64, is_playing: bool, area: Rect) -> Line<'a> {
+fn build_progress_line<'a>(
+    progress: i64,
+    duration: i64,
+    is_playing: bool,
+    volume: Option<u32>,
+    area: Rect,
+) -> Line<'a> {
     let status = if is_playing { "\u{25b6}" } else { "\u{23f8}" };
     let left = ui::format_duration(progress);
     let right = ui::format_duration(duration);
+    let vol_label = volume.map(|v| format!("  vol {v}%")).unwrap_or_default();
 
-    let label_width = 2 + 1 + left.len() + 1 + right.len() + 1; // status + gaps + times
+    let label_width = 2 + 1 + left.len() + 1 + right.len() + 1 + vol_label.len();
     let bar_width = (area.width as usize).saturating_sub(label_width);
 
     let ratio = if duration > 0 {
@@ -329,6 +340,7 @@ fn build_progress_line<'a>(progress: i64, duration: i64, is_playing: bool, area:
         Span::styled(empty_str, Style::new().fg(SEPARATOR_COLOR)),
         Span::raw(" "),
         Span::styled(right, Style::new().fg(Color::DarkGray)),
+        Span::styled(vol_label, Style::new().fg(Color::DarkGray)),
     ])
 }
 
@@ -345,6 +357,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" \u{23ed}/\u{23ee}  ", desc_style),
             Span::styled("\u{2190}/\u{2192}", key_style),
             Span::styled(" seek  ", desc_style),
+            Span::styled("\u{2191}/\u{2193}", key_style),
+            Span::styled(" vol  ", desc_style),
             Span::styled("l", key_style),
             Span::styled(" lrc  ", desc_style),
             Span::styled("q", key_style),
@@ -358,6 +372,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" next/prev  ", desc_style),
             Span::styled("</>", key_style),
             Span::styled(" seek  ", desc_style),
+            Span::styled("\u{2191}/\u{2193}", key_style),
+            Span::styled(" volume  ", desc_style),
             Span::styled("l", key_style),
             Span::styled(" lyrics  ", desc_style),
             Span::styled("q", key_style),
@@ -411,7 +427,7 @@ fn run_player_loop(
         current: None,
         next: Vec::new(),
     };
-    let mut last_drawn: Option<(i64, bool)> = None;
+    let mut last_drawn: Option<(i64, bool, Option<u32>)> = None;
     let mut last_queue_depth: (usize, usize) = (0, 0);
 
     // Lyrics state
@@ -465,6 +481,18 @@ fn run_player_loop(
                                 t.progress_ms = new_ms;
                                 fetch_anchor = Instant::now();
                                 needs_redraw = true;
+                            }
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Down => {
+                        if let Some(ref mut t) = info {
+                            if let Some(current_vol) = t.volume_percent {
+                                let delta: i32 = if key.code == KeyCode::Up { 5 } else { -5 };
+                                let new_vol = (current_vol as i32 + delta).clamp(0, 100) as u8;
+                                if spotify.volume(new_vol, None).is_ok() {
+                                    t.volume_percent = Some(new_vol as u32);
+                                    needs_redraw = true;
+                                }
                             }
                         }
                     }
@@ -588,7 +616,7 @@ fn run_player_loop(
                     }
                 }
 
-                let state = (progress_tick, track.is_playing);
+                let state = (progress_tick, track.is_playing, track.volume_percent);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
                     terminal.draw(|frame| {
                         draw_playing(

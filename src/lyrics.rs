@@ -393,15 +393,20 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
 
     let active = synced.active_line_index(position_ms);
 
-    // Center the active line vertically
-    let anchor_row = height / 2;
+    // Show at most 5 previous + current + 5 next lines
+    const LYRICS_WINDOW: usize = 11;
+    let window = height.min(LYRICS_WINDOW);
+    let y_offset = (height.saturating_sub(window)) / 2;
+
+    // Center the active line vertically within the window
+    let anchor_row = window / 2;
     let start_idx = active
         .map(|idx| idx.saturating_sub(anchor_row))
         .unwrap_or(0);
 
-    let mut rendered_lines: Vec<Line> = Vec::with_capacity(height);
+    let mut rendered_lines: Vec<Line> = Vec::with_capacity(window);
 
-    for row in 0..height {
+    for row in 0..window {
         let line_idx = start_idx + row;
         if line_idx >= synced.lines.len() {
             rendered_lines.push(Line::from(""));
@@ -424,8 +429,13 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
         rendered_lines.push(Line::from(Span::styled(text, style)));
     }
 
+    let lyrics_area = Rect {
+        y: area.y + y_offset as u16,
+        height: window as u16,
+        ..area
+    };
     let paragraph = Paragraph::new(rendered_lines);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, lyrics_area);
 }
 
 // ---------------------------------------------------------------------------
