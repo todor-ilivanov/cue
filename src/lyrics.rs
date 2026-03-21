@@ -410,7 +410,6 @@ fn draw_synced(
     let window = height.min(LYRICS_WINDOW);
     let y_offset = (height.saturating_sub(window)) / 2;
 
-    // Center on manual scroll position or active line
     let center = scroll_center.or(active).unwrap_or(0);
     let anchor_row = window / 2;
     let start_idx = center.saturating_sub(anchor_row);
