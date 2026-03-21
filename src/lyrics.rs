@@ -301,7 +301,13 @@ fn build_lyrics_separator(width: u16) -> Line<'static> {
     ])
 }
 
-pub fn draw_lyrics(frame: &mut Frame, area: Rect, state: &LyricsState, position_ms: u64) {
+pub fn draw_lyrics(
+    frame: &mut Frame,
+    area: Rect,
+    state: &LyricsState,
+    position_ms: u64,
+    scroll_center: Option<usize>,
+) {
     if area.height < 2 {
         return;
     }
@@ -336,7 +342,7 @@ pub fn draw_lyrics(frame: &mut Frame, area: Rect, state: &LyricsState, position_
             draw_plain(frame, content_area, text);
         }
         LyricsState::Synced(synced) => {
-            draw_synced(frame, content_area, synced, position_ms);
+            draw_synced(frame, content_area, synced, position_ms, scroll_center);
         }
     }
 }
@@ -385,7 +391,13 @@ fn draw_plain(frame: &mut Frame, area: Rect, text: &str) {
     frame.render_widget(paragraph, text_area);
 }
 
-fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms: u64) {
+fn draw_synced(
+    frame: &mut Frame,
+    area: Rect,
+    synced: &SyncedLyrics,
+    position_ms: u64,
+    scroll_center: Option<usize>,
+) {
     let height = area.height as usize;
     if height == 0 {
         return;
@@ -398,11 +410,10 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
     let window = height.min(LYRICS_WINDOW);
     let y_offset = (height.saturating_sub(window)) / 2;
 
-    // Center the active line vertically within the window
+    // Center on manual scroll position or active line
+    let center = scroll_center.or(active).unwrap_or(0);
     let anchor_row = window / 2;
-    let start_idx = active
-        .map(|idx| idx.saturating_sub(anchor_row))
-        .unwrap_or(0);
+    let start_idx = center.saturating_sub(anchor_row);
 
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(window);
 
@@ -436,6 +447,42 @@ fn draw_synced(frame: &mut Frame, area: Rect, synced: &SyncedLyrics, position_ms
     };
     let paragraph = Paragraph::new(rendered_lines);
     frame.render_widget(paragraph, lyrics_area);
+
+    // Distance indicator when in manual scroll mode
+    if scroll_center.is_some() {
+        if let Some(ai) = active {
+            let end_idx = start_idx + window;
+            let (arrow, dist, at_top) = if ai < start_idx {
+                ("\u{25b2}", start_idx - ai, true)
+            } else if ai >= end_idx {
+                ("\u{25bc}", ai - end_idx + 1, false)
+            } else {
+                return;
+            };
+
+            let label = if dist == 1 {
+                format!("{arrow} {dist} line \u{00b7} s to sync")
+            } else {
+                format!("{arrow} {dist} lines \u{00b7} s to sync")
+            };
+
+            let indicator = Line::from(Span::styled(
+                label,
+                Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            ));
+
+            let indicator_area = Rect {
+                y: if at_top {
+                    lyrics_area.y
+                } else {
+                    lyrics_area.y + lyrics_area.height.saturating_sub(1)
+                },
+                height: 1,
+                ..lyrics_area
+            };
+            frame.render_widget(Paragraph::new(indicator), indicator_area);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

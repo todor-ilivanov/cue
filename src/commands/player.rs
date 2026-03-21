@@ -136,6 +136,7 @@ fn draw_playing(
     queue: &QueueContext,
     lyrics_state: &LyricsState,
     show_lyrics: bool,
+    lyrics_scroll_center: Option<usize>,
 ) {
     let progress = progress_ms / 1000;
     let area = frame.area();
@@ -255,7 +256,13 @@ fn draw_playing(
 
     // Lyrics
     if show_lyrics {
-        lyrics::draw_lyrics(frame, rows[lyrics_row], lyrics_state, progress_ms as u64);
+        lyrics::draw_lyrics(
+            frame,
+            rows[lyrics_row],
+            lyrics_state,
+            progress_ms as u64,
+            lyrics_scroll_center,
+        );
     }
 
     // Hints
@@ -359,8 +366,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" seek  ", desc_style),
             Span::styled("\u{2191}/\u{2193}", key_style),
             Span::styled(" vol  ", desc_style),
-            Span::styled("l", key_style),
-            Span::styled(" lrc  ", desc_style),
+            Span::styled("j/k", key_style),
+            Span::styled(" scroll  ", desc_style),
             Span::styled("q", key_style),
             Span::styled(" quit", desc_style),
         ])
@@ -374,8 +381,10 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" seek  ", desc_style),
             Span::styled("\u{2191}/\u{2193}", key_style),
             Span::styled(" volume  ", desc_style),
-            Span::styled("l", key_style),
-            Span::styled(" lyrics  ", desc_style),
+            Span::styled("j/k", key_style),
+            Span::styled(" scroll lyrics  ", desc_style),
+            Span::styled("s", key_style),
+            Span::styled(" sync  ", desc_style),
             Span::styled("q", key_style),
             Span::styled(" quit", desc_style),
         ])
@@ -436,6 +445,7 @@ fn run_player_loop(
     let mut lyrics_track: Option<(String, String, String)> = None;
     let mut show_lyrics = !slim;
     let mut last_lyric_index: Option<Option<usize>> = None;
+    let mut lyrics_scroll_center: Option<usize> = None;
 
     loop {
         let mut needs_redraw = false;
@@ -500,6 +510,33 @@ fn run_player_loop(
                         show_lyrics = !show_lyrics;
                         needs_redraw = true;
                     }
+                    KeyCode::Char('j') | KeyCode::Char('k') => {
+                        if show_lyrics {
+                            if let LyricsState::Synced(ref synced) = lyrics_state {
+                                let current = lyrics_scroll_center.unwrap_or_else(|| {
+                                    info.as_ref()
+                                        .map(|t| {
+                                            let pm = current_progress_ms(t, fetch_anchor) as u64;
+                                            synced.active_line_index(pm).unwrap_or(0)
+                                        })
+                                        .unwrap_or(0)
+                                });
+                                let max_line = synced.lines.len().saturating_sub(1);
+                                lyrics_scroll_center = Some(if key.code == KeyCode::Char('j') {
+                                    current.saturating_add(1).min(max_line)
+                                } else {
+                                    current.saturating_sub(1)
+                                });
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                    KeyCode::Char('s') => {
+                        if lyrics_scroll_center.is_some() {
+                            lyrics_scroll_center = None;
+                            needs_redraw = true;
+                        }
+                    }
                     KeyCode::Char('r') => {
                         last_fetch = Instant::now() - poll_interval;
                     }
@@ -558,6 +595,7 @@ fn run_player_loop(
                     lyrics_track = Some((title.clone(), artist.clone(), album.clone()));
                     lyrics_state = LyricsState::Loading;
                     last_lyric_index = None;
+                    lyrics_scroll_center = None;
                     let duration = track.duration_secs;
                     let (tx, rx) = mpsc::channel();
                     lyrics_rx = Some(rx);
@@ -626,6 +664,7 @@ fn run_player_loop(
                             &queue,
                             &lyrics_state,
                             show_lyrics,
+                            lyrics_scroll_center,
                         );
                     })?;
                     last_drawn = Some(state);
