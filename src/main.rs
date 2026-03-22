@@ -129,18 +129,12 @@ fn main() -> Result<()> {
 
     let spotify = client::build_client(auth::load_config()?)?;
 
-    // Ensure a device is active for commands that need playback
-    let needs_device = matches!(
+    let needs_device = !matches!(
         cli.command,
-        Command::Play { .. }
-            | Command::Pause
-            | Command::Resume
-            | Command::Next
-            | Command::Prev
-            | Command::Now
-            | Command::Player { .. }
-            | Command::Volume { .. }
-            | Command::Queue { .. }
+        Command::Devices
+            | Command::Device { .. }
+            | Command::Search { .. }
+            | Command::Completions { .. }
     );
     if needs_device {
         commands::devices::ensure_device(&spotify)?;

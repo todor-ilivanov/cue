@@ -10,10 +10,8 @@ fn fetch_devices(spotify: &AuthCodeSpotify) -> Result<Vec<Device>> {
     })
 }
 
-fn do_transfer(spotify: &AuthCodeSpotify, device_id: &str, device_name: &str) -> Result<()> {
-    spotify.transfer_playback(device_id, None)?;
-    println!("Transferred playback to {device_name}");
-    Ok(())
+fn fetch_devices_silent(spotify: &AuthCodeSpotify) -> Result<Vec<Device>> {
+    spotify.device().context("failed to fetch devices")
 }
 
 fn require_device_id(device: &Device) -> Result<&str> {
@@ -65,10 +63,9 @@ pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
     Ok(())
 }
 
-/// Ensure a device is active before running a command.
-/// If one is already active, this is a no-op. Otherwise, it picks the best
-/// available device (preferring a Computer matching the local hostname) and
-/// silently transfers playback to it.
+/// Silently ensures a device is active before running a command.
+/// Prefers a Computer matching the local hostname, then any single Computer,
+/// then the first available device.
 pub fn ensure_device(spotify: &AuthCodeSpotify) -> Result<()> {
     let playback = spotify
         .current_playback(None, None::<&[_]>)
@@ -78,7 +75,7 @@ pub fn ensure_device(spotify: &AuthCodeSpotify) -> Result<()> {
         return Ok(());
     }
 
-    let devices = fetch_devices(spotify)?;
+    let devices = fetch_devices_silent(spotify)?;
     if devices.is_empty() {
         bail!("no devices found — open Spotify on a device first");
     }
@@ -98,8 +95,14 @@ fn local_hostname() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Pick the best device from a non-empty list.
-/// Prefers a Computer whose name matches the local hostname, then any Computer,
+fn normalize(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
+/// Prefers a Computer matching the local hostname, then any single Computer,
 /// then the first device.
 fn pick_best_device(devices: &[Device]) -> &Device {
     let computers: Vec<&Device> = devices
@@ -108,20 +111,10 @@ fn pick_best_device(devices: &[Device]) -> &Device {
         .collect();
 
     if let Some(hostname) = local_hostname() {
-        let hostname_lower = hostname.to_lowercase();
-        // Normalize hostname: "macbook-pro" -> "macbookpro", "macbook pro" -> "macbookpro"
-        let hostname_norm: String = hostname_lower
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .collect();
+        let hostname_norm = normalize(&hostname);
 
         if let Some(device) = computers.iter().find(|d| {
-            let name_norm: String = d
-                .name
-                .to_lowercase()
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .collect();
+            let name_norm = normalize(&d.name);
             name_norm.contains(&hostname_norm) || hostname_norm.contains(&name_norm)
         }) {
             return device;
@@ -156,21 +149,36 @@ fn transfer_by_name(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
     };
 
     let device_id = require_device_id(device)?;
-    do_transfer(spotify, device_id, &device.name)
+    spotify.transfer_playback(device_id, None)?;
+    println!("Transferred playback to {}", device.name);
+    Ok(())
 }
 
 fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
-    ensure_device(spotify)?;
-
     let playback = spotify
         .current_playback(None, None::<&[_]>)
         .context("failed to check current playback")?;
 
-    match playback.map(|p| (p.device.name.clone(), p.device._type)) {
-        Some((name, dtype)) => {
-            println!("{name} ({})", device_type_label(&dtype));
+    if let Some(ctx) = playback {
+        if ctx.device.id.is_some() {
+            println!(
+                "{} ({})",
+                ctx.device.name,
+                device_type_label(&ctx.device._type)
+            );
+            return Ok(());
         }
-        None => bail!("no active device"),
     }
+
+    // No active device — auto-resolve one
+    let devices = fetch_devices_silent(spotify)?;
+    if devices.is_empty() {
+        bail!("no devices found — open Spotify on a device first");
+    }
+
+    let device = pick_best_device(&devices);
+    let device_id = require_device_id(device)?;
+    spotify.transfer_playback(device_id, None)?;
+    println!("{} ({})", device.name, device_type_label(&device._type));
     Ok(())
 }
