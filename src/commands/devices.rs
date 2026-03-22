@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use rspotify::model::{Device, DeviceType};
-use rspotify::{prelude::OAuthClient, AuthCodeSpotify};
+use rspotify::prelude::OAuthClient;
+use rspotify::AuthCodeSpotify;
 
 use crate::ui;
 
@@ -67,12 +68,11 @@ pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
 /// Prefers a Computer matching the local hostname, then any single Computer,
 /// then the first available device.
 pub fn ensure_device(spotify: &AuthCodeSpotify) -> Result<()> {
-    let playback = spotify
-        .current_playback(None, None::<&[_]>)
-        .context("failed to check current playback")?;
-
-    if playback.and_then(|p| p.device.id).is_some() {
-        return Ok(());
+    match spotify.current_playback(None, None::<&[_]>) {
+        Ok(Some(pb)) if pb.device.id.is_some() => return Ok(()),
+        Ok(_) => {}
+        Err(rspotify::ClientError::ParseJson(_)) => return Ok(()),
+        Err(e) => return Err(anyhow::Error::from(e).context("failed to check current playback")),
     }
 
     let devices = fetch_devices_silent(spotify)?;
@@ -155,11 +155,7 @@ fn transfer_by_name(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
 }
 
 fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
-    let playback = spotify
-        .current_playback(None, None::<&[_]>)
-        .context("failed to check current playback")?;
-
-    if let Some(ctx) = playback {
+    if let Some(ctx) = super::current_playback(spotify)? {
         if ctx.device.id.is_some() {
             println!(
                 "{} ({})",

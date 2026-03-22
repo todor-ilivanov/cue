@@ -191,6 +191,12 @@ pub fn pause(spotify: &AuthCodeSpotify) -> Result<()> {
 }
 
 pub fn resume(spotify: &AuthCodeSpotify) -> Result<()> {
+    if let Ok(Some(pb)) = super::current_playback(spotify) {
+        if pb.is_playing {
+            println!("Already playing");
+            return Ok(());
+        }
+    }
     spotify
         .resume_playback(None, None)
         .map_err(|e| api_error(e, "resume playback"))?;
