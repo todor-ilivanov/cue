@@ -60,19 +60,22 @@ pub fn queue_add(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
     Ok(())
 }
 
-fn playable_song_line(item: &PlayableItem) -> String {
+fn playable_song_parts(item: &PlayableItem) -> (String, String) {
     match item {
-        PlayableItem::Track(track) => {
-            ui::styled_song(&track.name, &join_artist_names(&track.artists))
-        }
-        PlayableItem::Episode(episode) => ui::styled_song(&episode.name, &episode.show.name),
+        PlayableItem::Track(track) => (track.name.clone(), join_artist_names(&track.artists)),
+        PlayableItem::Episode(episode) => (episode.name.clone(), episode.show.name.clone()),
     }
 }
 
+pub struct SongEntry {
+    pub title: String,
+    pub artist: String,
+}
+
 pub struct QueueContext {
-    pub previous: Vec<String>,
-    pub current: Option<String>,
-    pub next: Vec<String>,
+    pub previous: Vec<SongEntry>,
+    pub current: Option<SongEntry>,
+    pub next: Vec<SongEntry>,
 }
 
 pub fn fetch_queue_context(
@@ -84,13 +87,19 @@ pub fn fetch_queue_context(
         .current_user_queue()
         .context("failed to get queue")?;
 
-    let current = queue.currently_playing.as_ref().map(playable_song_line);
+    let current = queue.currently_playing.as_ref().map(|item| {
+        let (title, artist) = playable_song_parts(item);
+        SongEntry { title, artist }
+    });
 
-    let next: Vec<String> = queue
+    let next: Vec<SongEntry> = queue
         .queue
         .iter()
         .take(next_count)
-        .map(playable_song_line)
+        .map(|item| {
+            let (title, artist) = playable_song_parts(item);
+            SongEntry { title, artist }
+        })
         .collect();
 
     let previous = if prev_count == 0 {
@@ -100,11 +109,14 @@ pub fn fetch_queue_context(
             .current_user_recently_played(Some(prev_count as u32), None)
             .context("failed to get recently played")?;
 
-        let mut items: Vec<String> = recent
+        let mut items: Vec<SongEntry> = recent
             .items
             .iter()
             .take(prev_count)
-            .map(|h| ui::styled_song(&h.track.name, &join_artist_names(&h.track.artists)))
+            .map(|h| SongEntry {
+                title: h.track.name.clone(),
+                artist: join_artist_names(&h.track.artists),
+            })
             .collect();
         items.reverse();
         items
@@ -127,7 +139,8 @@ pub fn queue_show(spotify: &AuthCodeSpotify) -> Result<()> {
 fn print_queue_context(ctx: &QueueContext) {
     let interactive = ui::is_interactive();
 
-    for line in &ctx.previous {
+    for entry in &ctx.previous {
+        let line = ui::styled_song(&entry.title, &entry.artist);
         if interactive {
             println!("  {}", console::style(line).dim());
         } else {
@@ -136,7 +149,7 @@ fn print_queue_context(ctx: &QueueContext) {
     }
 
     match &ctx.current {
-        Some(line) => println!("  {line}"),
+        Some(entry) => println!("  {}", ui::styled_song(&entry.title, &entry.artist)),
         None => println!(
             "  {}",
             if interactive {
@@ -147,7 +160,8 @@ fn print_queue_context(ctx: &QueueContext) {
         ),
     }
 
-    for line in &ctx.next {
+    for entry in &ctx.next {
+        let line = ui::styled_song(&entry.title, &entry.artist);
         if interactive {
             println!("  {}", console::style(line).dim());
         } else {

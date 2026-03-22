@@ -10,6 +10,7 @@ use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
 use super::join_artist_names;
+use super::queue::{fetch_queue_context, QueueContext, SongEntry};
 use crate::lyrics::{self, LyricsState};
 use crate::ui;
 
@@ -85,6 +86,52 @@ fn build_separator(width: u16) -> Line<'static> {
     ))
 }
 
+fn build_queue_separator(width: u16) -> Line<'static> {
+    let label = " queue ";
+    let remaining = (width as usize).saturating_sub(label.len());
+    let left = remaining / 2;
+    let right = remaining - left;
+    Line::from(vec![
+        Span::styled("─".repeat(left), Style::new().fg(SEPARATOR_COLOR)),
+        Span::styled(
+            label,
+            Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ),
+        Span::styled("─".repeat(right), Style::new().fg(SEPARATOR_COLOR)),
+    ])
+}
+
+fn queue_entry_line(entry: &SongEntry) -> Line<'_> {
+    Line::from(vec![
+        Span::styled("  ", Style::new()),
+        Span::styled(&entry.title, Style::new().fg(Color::DarkGray)),
+        Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)),
+        Span::styled(&entry.artist, Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+    ])
+}
+
+fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
+    if area.height == 0 {
+        return;
+    }
+
+    let sep_area = Rect { height: 1, ..area };
+    frame.render_widget(
+        Paragraph::new(build_queue_separator(area.width)),
+        sep_area,
+    );
+
+    let mut y = area.y + 1;
+    for entry in &ctx.next {
+        if y >= area.y + area.height {
+            break;
+        }
+        let row = Rect { y, height: 1, ..area };
+        frame.render_widget(Paragraph::new(queue_entry_line(entry)), row);
+        y += 1;
+    }
+}
+
 fn draw_playing(
     frame: &mut Frame,
     info: &TrackInfo,
@@ -92,6 +139,7 @@ fn draw_playing(
     lyrics_state: &LyricsState,
     show_lyrics: bool,
     lyrics_scroll_center: Option<usize>,
+    queue_context: Option<&QueueContext>,
 ) {
     let area = frame.area();
     let max_width = 80u16;
@@ -137,6 +185,19 @@ fn draw_playing(
     let sep_below_row = constraints.len();
     constraints.push(Constraint::Length(1));
 
+    // Queue section (separator + items)
+    let queue_row = if let Some(ctx) = queue_context {
+        if ctx.next.is_empty() {
+            None
+        } else {
+            let r = constraints.len();
+            constraints.push(Constraint::Length(1 + ctx.next.len() as u16));
+            Some(r)
+        }
+    } else {
+        None
+    };
+
     let lyrics_row = constraints.len();
     constraints.push(Constraint::Min(0)); // lyrics or spacer
     constraints.push(Constraint::Length(1)); // blank line above hints
@@ -178,6 +239,13 @@ fn draw_playing(
     // Separator below now-playing
     frame.render_widget(Paragraph::new(build_separator(width)), rows[sep_below_row]);
 
+    // Queue
+    if let Some(qr) = queue_row {
+        if let Some(ctx) = queue_context {
+            draw_queue(frame, rows[qr], ctx);
+        }
+    }
+
     // Lyrics
     if show_lyrics {
         lyrics::draw_lyrics(
@@ -216,7 +284,7 @@ fn draw_empty(frame: &mut Frame) {
     let hints = Line::from(vec![
         Span::styled("r", key_style),
         Span::styled(" refresh  ", desc_style),
-        Span::styled("q", key_style),
+        Span::styled("esc", key_style),
         Span::styled(" quit", desc_style),
     ]);
     frame.render_widget(Paragraph::new(hints), rows[3]);
@@ -288,6 +356,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled("s", key_style),
             Span::styled(" sync  ", desc_style),
             Span::styled("q", key_style),
+            Span::styled(" queue  ", desc_style),
+            Span::styled("esc", key_style),
             Span::styled(" quit", desc_style),
         ])
     } else {
@@ -305,6 +375,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled("s", key_style),
             Span::styled(" sync  ", desc_style),
             Span::styled("q", key_style),
+            Span::styled(" queue  ", desc_style),
+            Span::styled("esc", key_style),
             Span::styled(" quit", desc_style),
         ])
     }
@@ -360,6 +432,10 @@ fn run_player_loop(
     let mut last_lyric_index: Option<Option<usize>> = None;
     let mut lyrics_scroll_center: Option<usize> = None;
 
+    // Queue state
+    let mut show_queue = false;
+    let mut queue_context: Option<QueueContext> = None;
+
     loop {
         let mut needs_redraw = false;
 
@@ -367,7 +443,16 @@ fn run_player_loop(
         while crossterm::event::poll(Duration::ZERO)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') => {
+                        show_queue = !show_queue;
+                        if show_queue && queue_context.is_none() {
+                            if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
+                                queue_context = Some(ctx);
+                            }
+                        }
+                        needs_redraw = true;
+                    }
                     KeyCode::Char(' ') => {
                         if let Some(ref mut t) = info {
                             if t.is_playing {
@@ -387,7 +472,7 @@ fn run_player_loop(
                         } else {
                             spotify.previous_track(None)
                         };
-                        deferred_fetch = Some(Instant::now() + Duration::from_millis(400));
+                        deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
                         needs_redraw = true;
                     }
                     KeyCode::Left | KeyCode::Right => {
@@ -479,6 +564,13 @@ fn run_player_loop(
             }
             last_fetch = Instant::now();
 
+            // Re-fetch queue while visible.
+            if show_queue {
+                if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
+                    queue_context = Some(ctx);
+                }
+            }
+
             // Detect track change and trigger lyrics fetch.
             if let Some(ref track) = info {
                 let identity = (
@@ -556,6 +648,7 @@ fn run_player_loop(
 
                 let state = (elapsed_secs, elapsed_secs, track.is_playing, track.volume_percent);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
+                    let qctx = if show_queue { queue_context.as_ref() } else { None };
                     terminal.draw(|frame| {
                         draw_playing(
                             frame,
@@ -564,6 +657,7 @@ fn run_player_loop(
                             &lyrics_state,
                             show_lyrics,
                             lyrics_scroll_center,
+                            qctx,
                         );
                     })?;
                     last_drawn = Some(state);
