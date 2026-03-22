@@ -71,13 +71,7 @@ fn queue_depth(area_height: u16) -> (usize, usize) {
 }
 
 fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
-    let context = match spotify.current_playback(None, None::<&[_]>) {
-        Ok(ctx) => ctx,
-        Err(rspotify::ClientError::ParseJson(_)) => return Ok(None),
-        Err(e) => return Err(anyhow::Error::from(e).context("failed to get current playback")),
-    };
-
-    let Some(ctx) = context else {
+    let Some(ctx) = super::current_playback(spotify)? else {
         return Ok(None);
     };
 

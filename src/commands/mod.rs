@@ -5,8 +5,22 @@ pub mod queue;
 pub mod search;
 pub mod volume;
 
-use anyhow::anyhow;
-use rspotify::ClientError;
+use anyhow::{anyhow, Result};
+use rspotify::model::CurrentPlaybackContext;
+use rspotify::prelude::OAuthClient;
+use rspotify::{AuthCodeSpotify, ClientError};
+
+/// Fetch current playback, treating JSON parse failures as None.
+/// rspotify can fail to deserialize when Spotify returns null for
+/// fields like shuffle_state; a non-empty response that fails to
+/// parse still implies a device is active.
+pub fn current_playback(spotify: &AuthCodeSpotify) -> Result<Option<CurrentPlaybackContext>> {
+    match spotify.current_playback(None, None::<&[_]>) {
+        Ok(ctx) => Ok(ctx),
+        Err(ClientError::ParseJson(_)) => Ok(None),
+        Err(e) => Err(anyhow::Error::from(e).context("failed to get current playback")),
+    }
+}
 
 pub fn join_artist_names(artists: &[rspotify::model::SimplifiedArtist]) -> String {
     artists

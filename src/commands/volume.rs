@@ -30,15 +30,7 @@ fn set_volume(spotify: &AuthCodeSpotify, input: &str) -> Result<()> {
 }
 
 fn get_volume(spotify: &AuthCodeSpotify) -> Result<u32> {
-    let playback = ui::with_spinner("Fetching volume...", || {
-        match spotify.current_playback(None, None::<&[_]>) {
-            Ok(pb) => Ok(pb),
-            Err(rspotify::ClientError::ParseJson(_)) => {
-                bail!("could not read volume — try again or restart Spotify")
-            }
-            Err(e) => Err(anyhow::Error::from(e).context("failed to get current playback")),
-        }
-    })?;
+    let playback = ui::with_spinner("Fetching volume...", || super::current_playback(spotify))?;
 
     playback
         .and_then(|p| p.device.volume_percent)

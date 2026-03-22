@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use rspotify::model::{Device, DeviceType};
-use rspotify::{prelude::OAuthClient, AuthCodeSpotify};
+use rspotify::prelude::OAuthClient;
+use rspotify::AuthCodeSpotify;
 
 use crate::ui;
 
@@ -70,7 +71,6 @@ pub fn ensure_device(spotify: &AuthCodeSpotify) -> Result<()> {
     match spotify.current_playback(None, None::<&[_]>) {
         Ok(Some(pb)) if pb.device.id.is_some() => return Ok(()),
         Ok(_) => {}
-        // Non-empty response that failed to parse (e.g. null shuffle_state) means a device is active
         Err(rspotify::ClientError::ParseJson(_)) => return Ok(()),
         Err(e) => return Err(anyhow::Error::from(e).context("failed to check current playback")),
     }
@@ -155,8 +155,8 @@ fn transfer_by_name(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
 }
 
 fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
-    match spotify.current_playback(None, None::<&[_]>) {
-        Ok(Some(ctx)) if ctx.device.id.is_some() => {
+    if let Some(ctx) = super::current_playback(spotify)? {
+        if ctx.device.id.is_some() {
             println!(
                 "{} ({})",
                 ctx.device.name,
@@ -164,10 +164,6 @@ fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
             );
             return Ok(());
         }
-        Ok(_) => {}
-        // Non-empty response that failed to parse — fall through to device discovery
-        Err(rspotify::ClientError::ParseJson(_)) => {}
-        Err(e) => return Err(anyhow::Error::from(e).context("failed to check current playback")),
     }
 
     // No active device — auto-resolve one
