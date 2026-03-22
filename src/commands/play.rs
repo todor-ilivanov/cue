@@ -1,7 +1,10 @@
 use anyhow::{bail, Context, Result};
-use rspotify::model::SearchResult;
+use rspotify::model::{PlayableItem, SearchResult};
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
+
+use std::thread;
+use std::time::Duration;
 
 use super::{api_error, join_artist_names};
 use crate::ui;
@@ -131,23 +134,9 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
 }
 
 fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
-    let result = ui::with_spinner("Searching...", || {
-        spotify
-            .search(
-                query,
-                rspotify::model::SearchType::Playlist,
-                None,
-                None,
-                Some(5),
-                None,
-            )
-            .context("failed to search for playlist")
+    let playlists = ui::with_spinner("Searching...", || {
+        crate::client::search_playlists(spotify, query, 5)
     })?;
-
-    let playlists = match result {
-        SearchResult::Playlists(page) => page,
-        _ => bail!("unexpected search result type"),
-    };
 
     let candidates: Vec<ui::PickCandidate> = playlists
         .items
@@ -208,6 +197,21 @@ pub fn next(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .next_track(None)
         .map_err(|e| api_error(e, "skip to next track"))?;
+    thread::sleep(Duration::from_millis(300));
+    if let Ok(Some(ctx)) = super::current_playback(spotify) {
+        match ctx.item {
+            Some(PlayableItem::Track(track)) => {
+                let artists = join_artist_names(&track.artists);
+                println!("Now playing: {}", ui::styled_song(&track.name, &artists));
+                return Ok(());
+            }
+            Some(PlayableItem::Episode(ep)) => {
+                println!("Now playing: {}", ui::styled_song(&ep.name, &ep.show.name));
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     println!("Skipped to next track");
     Ok(())
 }
@@ -216,6 +220,21 @@ pub fn prev(spotify: &AuthCodeSpotify) -> Result<()> {
     spotify
         .previous_track(None)
         .map_err(|e| api_error(e, "go to previous track"))?;
+    thread::sleep(Duration::from_millis(300));
+    if let Ok(Some(ctx)) = super::current_playback(spotify) {
+        match ctx.item {
+            Some(PlayableItem::Track(track)) => {
+                let artists = join_artist_names(&track.artists);
+                println!("Now playing: {}", ui::styled_song(&track.name, &artists));
+                return Ok(());
+            }
+            Some(PlayableItem::Episode(ep)) => {
+                println!("Now playing: {}", ui::styled_song(&ep.name, &ep.show.name));
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     println!("Back to previous track");
     Ok(())
 }

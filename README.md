@@ -2,6 +2,18 @@
 
 A command-line Spotify remote control. It talks to the Spotify Web API to control playback on whatever device is already running. It does not stream audio.
 
+<!-- TODO: Add a terminal recording (asciinema/GIF) of `cue player` showing lyrics -->
+
+## Features
+
+- Live player view with synced lyrics, progress bar, and keyboard controls
+- Fuzzy search with auto-pick for unambiguous matches
+- Interactive arrow-key pickers for tracks, albums, and devices
+- Relative volume control (`+10`, `-10`)
+- Smart device selection — auto-picks based on hostname
+- Graceful degradation when piped (no color, no interactivity, auto-picks best result)
+- Shell completions for bash, zsh, and fish
+
 ## Install
 
 ```bash
@@ -10,25 +22,60 @@ cd cue
 ./install.sh
 ```
 
-The install script will walk you through building, installing the binary, configuring Spotify credentials, setting up shell completions, and authenticating.
+The install script walks you through building, installing the binary, configuring Spotify credentials, setting up shell completions, and authenticating.
+
+See [Manual install](#manual-install) if you prefer to set things up yourself.
+
+## Commands
+
+No quotes needed around multi-word queries. Spotify must be open on at least one device.
+
+```
+cue play <query>          Play a track, album (--album), or playlist (--playlist)
+cue pause                 Pause playback
+cue resume                Resume playback
+cue next / prev           Skip forward or back
+cue now                   Show what's currently playing
+cue player                Live player with lyrics, progress bar, keyboard controls
+cue search <query>        Search for tracks or albums (--album)
+cue devices               List available devices
+cue device [name]         Show active device, or transfer to one by name
+cue volume [level]        Show or set volume (0-100, +N, -N)
+cue queue [query]         Show the queue, or add a track to it
+cue completions <shell>   Generate shell completions (bash, zsh, fish)
+```
+
+Run `cue <command> --help` for full options.
+
+## Examples
+
+```bash
+cue devices                       # see what's available
+cue device MacBook                # pick a device
+cue play bohemian rhapsody        # play a track
+cue player                        # open the live player
+cue volume +10                    # turn it up
+cue queue another one bites the dust
+cue search --album abbey road     # browse albums
+```
+
+## Configuration
 
 ### Manual install
-
-If you prefer to set things up manually:
 
 ```bash
 cargo build --release
 cp target/release/cue ~/.local/bin/
 ```
 
-**1. Create a Spotify app:**
+### Spotify app setup
 
-- Go to https://developer.spotify.com/dashboard
-- Create a new app
-- Set the redirect URI to `http://127.0.0.1:8888/callback`
-- Note your Client ID and Client Secret
+1. Go to https://developer.spotify.com/dashboard
+2. Create a new app
+3. Set the redirect URI to `http://127.0.0.1:8888/callback`
+4. Note your Client ID and Client Secret
 
-**2. Create the config file:**
+### Config file
 
 The config directory depends on your OS:
 
@@ -45,43 +92,14 @@ client_id = "your_client_id"
 client_secret = "your_client_secret"
 ```
 
-**3. Authenticate:**
+### Authentication
 
-Run any command (e.g. `cue devices`). Your browser will open automatically for Spotify OAuth. After authorizing, the token is saved automatically.
+Run any command (e.g. `cue devices`). Your browser will open automatically for Spotify OAuth. After authorizing, the token is saved and refreshed automatically.
 
-## Usage
-
-Spotify must be open on at least one device (phone, desktop app, web player). `cue` is a remote control — it doesn't play audio itself.
-
-No quotes needed around multi-word queries. When multiple results match, an interactive picker lets you choose.
-
-```
-cue play <query>            Play a track (fuzzy search, interactive pick)
-cue play --album <query>    Play an album
-cue play --playlist <query> Play a playlist
-cue pause                   Pause playback
-cue resume                  Resume playback
-cue next                    Skip to next track
-cue prev                    Go to previous track
-cue now                     Show what's currently playing
-cue search <query>          Search for tracks
-cue search --album <query>  Search for albums
-cue devices                 List available devices
-cue device                  Interactive device picker
-cue device <name>           Transfer playback to a device by name
-cue volume <0-100>          Set volume
-cue queue <query>           Add a track to the queue
-```
-
-### Example
+## Shell completions
 
 ```bash
-cue devices
-cue device MacBook
-cue play bohemian rhapsody
-cue now
-cue volume 50
-cue next
-cue queue another one bites the dust
-cue search --album abbey road
+cue completions bash >> ~/.bashrc
+cue completions zsh > ~/.zfunc/_cue
+cue completions fish > ~/.config/fish/completions/cue.fish
 ```

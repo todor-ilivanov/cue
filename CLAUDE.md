@@ -1,6 +1,6 @@
 # cue
 
-A command-line Spotify remote control. It talks to the Spotify Web API to control playback on whatever device is already running. It does not stream audio. It is not a TUI.
+A command-line Spotify remote control. It talks to the Spotify Web API to control playback on whatever device is already running. It does not stream audio.
 
 ## Philosophy
 
@@ -34,6 +34,10 @@ Rust. These crates, and only these:
 | `chrono` | Duration types for Spotify API seek |
 | `ratatui` | Terminal UI for the player view |
 | `crossterm` | Terminal backend for ratatui |
+| `clap_complete` | Shell completion generation |
+| `toml` | Config file parsing |
+| `ureq` | HTTP client for lyrics API |
+| `rustls` / `rustls-native-certs` | TLS for lyrics HTTP requests |
 
 Do not add dependencies without justification. If the standard library can do it, use the standard library.
 
@@ -45,10 +49,11 @@ src/
 ├── auth.rs              # OAuth flow, token persistence, config loading, device memory
 ├── client.rs            # Authenticated rspotify client construction
 ├── ui.rs                # Terminal interaction: spinners, styled output, selection, browser open
+├── lyrics.rs            # Lyrics fetching from LRCLIB, LRC parsing, rendering
 └── commands/
     ├── mod.rs
     ├── play.rs          # play, pause, resume, next, prev (fuzzy search + interactive select)
-    ├── player.rs        # player (live now-playing view with keyboard controls)
+    ├── player.rs        # player (live TUI with progress, lyrics, keyboard controls)
     ├── search.rs        # search, now (styled output)
     ├── devices.rs       # devices, device (smart picker with memory)
     ├── volume.rs        # volume

@@ -10,7 +10,6 @@ use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
 use super::join_artist_names;
-use super::queue::{fetch_queue_context, QueueContext};
 use crate::lyrics::{self, LyricsState};
 use crate::ui;
 
@@ -19,7 +18,6 @@ use std::time::{Duration, Instant};
 
 // Amber/gold accent palette
 const ACCENT: Color = Color::Rgb(255, 191, 0);
-const ACCENT_DIM: Color = Color::Rgb(153, 115, 0);
 const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
 
 struct TrackInfo {
@@ -30,44 +28,6 @@ struct TrackInfo {
     progress_ms: i64,
     is_playing: bool,
     volume_percent: Option<u32>,
-}
-
-/// How many prev/next queue items to show based on available terminal height.
-/// Fixed rows always present: track(1) + album(1) + progress(1) + hints(1) = 4.
-/// Each direction with items also adds a 1-row separator line.
-const FIXED_ROWS: u16 = 4;
-const MAX_QUEUE_PER_DIRECTION: usize = 3;
-
-fn queue_depth(area_height: u16) -> (usize, usize) {
-    let available = area_height.saturating_sub(FIXED_ROWS) as usize;
-    // Each direction costs count + 1 separator when count > 0.
-    // Try increasing total items until we run out of space.
-    let mut next = 0;
-    let mut prev = 0;
-    let mut used = 0;
-    // Alternate adding next, then prev
-    loop {
-        if next < MAX_QUEUE_PER_DIRECTION {
-            let cost = if next == 0 { 2 } else { 1 }; // first item includes separator
-            if used + cost > available {
-                break;
-            }
-            next += 1;
-            used += cost;
-        }
-        if prev < MAX_QUEUE_PER_DIRECTION {
-            let cost = if prev == 0 { 2 } else { 1 };
-            if used + cost > available {
-                break;
-            }
-            prev += 1;
-            used += cost;
-        }
-        if next >= MAX_QUEUE_PER_DIRECTION && prev >= MAX_QUEUE_PER_DIRECTION {
-            break;
-        }
-    }
-    (prev, next)
 }
 
 fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
@@ -129,36 +89,29 @@ fn draw_playing(
     frame: &mut Frame,
     info: &TrackInfo,
     progress_ms: i64,
-    queue: &QueueContext,
     lyrics_state: &LyricsState,
     show_lyrics: bool,
     lyrics_scroll_center: Option<usize>,
 ) {
-    let progress = progress_ms / 1000;
     let area = frame.area();
-    let height = area.height;
-    let width = area.width;
+    let max_width = 80u16;
+    let content_area = if area.width > max_width {
+        let margin = (area.width - max_width) / 2;
+        Rect::new(area.x + margin, area.y, max_width, area.height)
+    } else {
+        area
+    };
+    let height = content_area.height;
+    let width = content_area.width;
 
     let compact = height < 10;
     let show_album = !compact;
     let show_top_margin = height > 12;
-    let show_queue = height >= 8;
-
-    let (prev_count, next_count) = if show_queue {
-        queue_depth(area.height)
-    } else {
-        (0, 0)
-    };
 
     let mut constraints: Vec<Constraint> = Vec::new();
 
     // Top margin for breathing room
     if show_top_margin {
-        constraints.push(Constraint::Length(1));
-    }
-
-    // Previous tracks
-    for _ in 0..prev_count {
         constraints.push(Constraint::Length(1));
     }
 
@@ -184,29 +137,13 @@ fn draw_playing(
     let sep_below_row = constraints.len();
     constraints.push(Constraint::Length(1));
 
-    // Next tracks
-    let next_start = constraints.len();
-    for _ in 0..next_count {
-        constraints.push(Constraint::Length(1));
-    }
-
     let lyrics_row = constraints.len();
     constraints.push(Constraint::Min(0)); // lyrics or spacer
+    constraints.push(Constraint::Length(1)); // blank line above hints
     let hints_row = constraints.len();
     constraints.push(Constraint::Length(1)); // hints
 
-    let rows = Layout::vertical(constraints).split(area);
-
-    // Previous tracks (dim, oldest first)
-    let prev_items: Vec<&String> = queue.previous.iter().rev().take(prev_count).collect();
-    let prev_offset = if show_top_margin { 1 } else { 0 };
-    for (i, line) in prev_items.iter().rev().enumerate() {
-        let text = Line::from(Span::styled(
-            format!("  {line}"),
-            Style::new().fg(Color::DarkGray),
-        ));
-        frame.render_widget(Paragraph::new(text), rows[prev_offset + i]);
-    }
+    let rows = Layout::vertical(constraints).split(content_area);
 
     // Separator above now-playing
     frame.render_widget(Paragraph::new(build_separator(width)), rows[sep_above_row]);
@@ -230,7 +167,7 @@ fn draw_playing(
 
     // Progress bar
     let progress_line = build_progress_line(
-        progress,
+        progress_ms,
         info.duration_secs,
         info.is_playing,
         info.volume_percent,
@@ -240,15 +177,6 @@ fn draw_playing(
 
     // Separator below now-playing
     frame.render_widget(Paragraph::new(build_separator(width)), rows[sep_below_row]);
-
-    // Next tracks
-    for (i, line) in queue.next.iter().take(next_count).enumerate() {
-        let text = Line::from(Span::styled(
-            format!("  {line}"),
-            Style::new().fg(Color::DarkGray),
-        ));
-        frame.render_widget(Paragraph::new(text), rows[next_start + i]);
-    }
 
     // Lyrics
     if show_lyrics {
@@ -294,53 +222,46 @@ fn draw_empty(frame: &mut Frame) {
     frame.render_widget(Paragraph::new(hints), rows[3]);
 }
 
-// Fractional block characters for smooth progress bar (eighths: 1/8 to 7/8)
-const BLOCK_EIGHTHS: [char; 8] = [
-    ' ', '\u{258f}', '\u{258e}', '\u{258d}', '\u{258c}', '\u{258b}', '\u{258a}', '\u{2589}',
-];
+fn progress_bar_width(content_width: u16, progress_secs: i64, duration_secs: i64, volume: Option<u32>) -> usize {
+    let left_len = ui::format_duration(progress_secs).len();
+    let right_len = ui::format_duration(duration_secs).len();
+    let vol_len = volume.map(|v| format!("  vol {v}%").len()).unwrap_or(0);
+    let label_width = 2 + left_len + 1 + 1 + right_len + vol_len;
+    (content_width as usize).saturating_sub(label_width)
+}
 
 fn build_progress_line<'a>(
-    progress: i64,
-    duration: i64,
+    progress_ms: i64,
+    duration_secs: i64,
     is_playing: bool,
     volume: Option<u32>,
     area: Rect,
 ) -> Line<'a> {
+    let progress_secs = progress_ms / 1000;
     let status = if is_playing { "\u{25b6}" } else { "\u{23f8}" };
-    let left = ui::format_duration(progress);
-    let right = ui::format_duration(duration);
+    let left = ui::format_duration(progress_secs);
+    let right = ui::format_duration(duration_secs);
     let vol_label = volume.map(|v| format!("  vol {v}%")).unwrap_or_default();
 
-    let label_width = 2 + 1 + left.len() + 1 + right.len() + 1 + vol_label.len();
-    let bar_width = (area.width as usize).saturating_sub(label_width);
+    let bar_width = progress_bar_width(area.width, progress_secs, duration_secs, volume);
 
-    let ratio = if duration > 0 {
-        (progress as f64 / duration as f64).clamp(0.0, 1.0)
+    let ratio = if duration_secs > 0 {
+        (progress_ms as f64 / (duration_secs as f64 * 1000.0)).clamp(0.0, 1.0)
     } else {
         0.0
     };
 
-    // Sub-character precision using fractional blocks
-    let total_eighths = (bar_width as f64 * 8.0 * ratio).round() as usize;
-    let full_blocks = total_eighths / 8;
-    let remainder = total_eighths % 8;
-
-    let filled_str: String = "\u{2588}".repeat(full_blocks);
-    let frac_char = if remainder > 0 && full_blocks < bar_width {
-        BLOCK_EIGHTHS[remainder].to_string()
-    } else {
-        String::new()
-    };
-    let empty_count = bar_width.saturating_sub(full_blocks + if remainder > 0 { 1 } else { 0 });
-    let empty_str: String = " ".repeat(empty_count);
+    let bar_inner = bar_width.saturating_sub(1); // reserve 1 for dot
+    let filled = (bar_inner as f64 * ratio).floor() as usize;
+    let remaining = bar_inner.saturating_sub(filled);
 
     Line::from(vec![
         Span::styled(format!("{status} "), Style::new().fg(ACCENT)),
         Span::styled(left, Style::new().fg(Color::White)),
         Span::raw(" "),
-        Span::styled(filled_str, Style::new().fg(ACCENT)),
-        Span::styled(frac_char, Style::new().fg(ACCENT_DIM)),
-        Span::styled(empty_str, Style::new().fg(SEPARATOR_COLOR)),
+        Span::styled("\u{2501}".repeat(filled), Style::new().fg(ACCENT)),
+        Span::styled("\u{25cf}", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled("\u{2500}".repeat(remaining), Style::new().fg(SEPARATOR_COLOR)),
         Span::raw(" "),
         Span::styled(right, Style::new().fg(Color::DarkGray)),
         Span::styled(vol_label, Style::new().fg(Color::DarkGray)),
@@ -351,7 +272,7 @@ fn build_hints_playing(width: u16) -> Line<'static> {
     let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(Color::DarkGray);
 
-    if width < 60 {
+    if width < 85 {
         // Compact hints for narrow terminals
         Line::from(vec![
             Span::styled("spc", key_style),
@@ -364,6 +285,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" vol  ", desc_style),
             Span::styled("j/k", key_style),
             Span::styled(" scroll  ", desc_style),
+            Span::styled("s", key_style),
+            Span::styled(" sync  ", desc_style),
             Span::styled("q", key_style),
             Span::styled(" quit", desc_style),
         ])
@@ -427,13 +350,7 @@ fn run_player_loop(
     let mut fetch_anchor = Instant::now();
     let mut deferred_fetch: Option<Instant> = None;
     let mut info: Option<TrackInfo> = None;
-    let mut queue = QueueContext {
-        previous: Vec::new(),
-        current: None,
-        next: Vec::new(),
-    };
-    let mut last_drawn: Option<(i64, bool, Option<u32>)> = None;
-    let mut last_queue_depth: (usize, usize) = (0, 0);
+    let mut last_drawn: Option<(i64, i64, bool, Option<u32>)> = None;
 
     // Lyrics state
     let mut lyrics_state = LyricsState::None;
@@ -553,24 +470,12 @@ fn run_player_loop(
             }
         }
 
-        // Track terminal size changes for layout (no API fetch — next poll handles it)
-        let current_depth = queue_depth(terminal.size()?.height);
-        if current_depth != last_queue_depth {
-            last_queue_depth = current_depth;
-            needs_redraw = true;
-        }
-
         // Poll API
         if last_fetch.elapsed() >= poll_interval {
             if let Ok(new_info) = fetch_now_playing(spotify) {
                 fetch_anchor = Instant::now();
                 info = new_info;
                 needs_redraw = true;
-                if let Ok(ctx) =
-                    fetch_queue_context(spotify, last_queue_depth.0, last_queue_depth.1)
-                {
-                    queue = ctx;
-                }
             }
             last_fetch = Instant::now();
 
@@ -635,8 +540,7 @@ fn run_player_loop(
         match &info {
             Some(track) => {
                 let progress_ms = current_progress_ms(track, fetch_anchor);
-                // 250ms granularity for smooth progress bar updates
-                let progress_tick = progress_ms / 250;
+                let elapsed_secs = progress_ms / 1000;
 
                 // Check if active lyric line changed.
                 if show_lyrics {
@@ -650,14 +554,13 @@ fn run_player_loop(
                     }
                 }
 
-                let state = (progress_tick, track.is_playing, track.volume_percent);
+                let state = (elapsed_secs, elapsed_secs, track.is_playing, track.volume_percent);
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
                     terminal.draw(|frame| {
                         draw_playing(
                             frame,
                             track,
                             progress_ms,
-                            &queue,
                             &lyrics_state,
                             show_lyrics,
                             lyrics_scroll_center,

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use rspotify::{
+    model::{Page, SimplifiedPlaylist},
     prelude::{BaseClient, OAuthClient},
     scopes, AuthCodeSpotify, Credentials, OAuth,
 };
@@ -26,7 +27,8 @@ pub fn build_client(config: Config) -> Result<AuthCodeSpotify> {
         scopes: scopes!(
             "user-read-playback-state",
             "user-modify-playback-state",
-            "user-read-currently-playing"
+            "user-read-currently-playing",
+            "user-read-recently-played"
         ),
         ..Default::default()
     };
@@ -82,6 +84,46 @@ pub fn persist_token(spotify: &AuthCodeSpotify) -> Result<()> {
         auth::save_token(t)?;
     }
     Ok(())
+}
+
+/// Search for playlists, filtering out null items that Spotify sometimes
+/// returns for unavailable playlists (which cause rspotify parse errors).
+pub fn search_playlists(
+    spotify: &AuthCodeSpotify,
+    query: &str,
+    limit: u32,
+) -> Result<Page<SimplifiedPlaylist>> {
+    let access_token = {
+        let guard = spotify
+            .token
+            .lock()
+            .map_err(|_| anyhow!("token lock failed"))?;
+        guard
+            .as_ref()
+            .context("no token available")?
+            .access_token
+            .clone()
+    };
+
+    let resp = ureq::get("https://api.spotify.com/v1/search")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .query("q", query)
+        .query("type", "playlist")
+        .query("limit", &limit.to_string())
+        .call()
+        .context("failed to search for playlist")?;
+
+    let body = resp.into_string().context("failed to read search response")?;
+    let mut json: serde_json::Value =
+        serde_json::from_str(&body).context("failed to parse search response")?;
+
+    if let Some(items) = json.pointer_mut("/playlists/items") {
+        if let Some(arr) = items.as_array_mut() {
+            arr.retain(|item| !item.is_null());
+        }
+    }
+
+    serde_json::from_value(json["playlists"].take()).context("failed to parse playlist results")
 }
 
 fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {

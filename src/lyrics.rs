@@ -405,10 +405,7 @@ fn draw_synced(
 
     let active = synced.active_line_index(position_ms);
 
-    // Show at most 5 previous + current + 5 next lines
-    const LYRICS_WINDOW: usize = 11;
-    let window = height.min(LYRICS_WINDOW);
-    let y_offset = (height.saturating_sub(window)) / 2;
+    let window = height;
 
     let center = scroll_center.or(active).unwrap_or(0);
     let anchor_row = window / 2;
@@ -440,7 +437,6 @@ fn draw_synced(
     }
 
     let lyrics_area = Rect {
-        y: area.y + y_offset as u16,
         height: window as u16,
         ..area
     };
