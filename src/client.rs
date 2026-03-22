@@ -113,7 +113,9 @@ pub fn search_playlists(
         .call()
         .context("failed to search for playlist")?;
 
-    let body = resp.into_string().context("failed to read search response")?;
+    let body = resp
+        .into_string()
+        .context("failed to read search response")?;
     let mut json: serde_json::Value =
         serde_json::from_str(&body).context("failed to parse search response")?;
 

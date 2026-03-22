@@ -106,7 +106,10 @@ fn queue_entry_line(entry: &SongEntry) -> Line<'_> {
         Span::styled("  ", Style::new()),
         Span::styled(&entry.title, Style::new().fg(Color::DarkGray)),
         Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)),
-        Span::styled(&entry.artist, Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+        Span::styled(
+            &entry.artist,
+            Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ),
     ])
 }
 
@@ -116,17 +119,18 @@ fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
     }
 
     let sep_area = Rect { height: 1, ..area };
-    frame.render_widget(
-        Paragraph::new(build_queue_separator(area.width)),
-        sep_area,
-    );
+    frame.render_widget(Paragraph::new(build_queue_separator(area.width)), sep_area);
 
     let mut y = area.y + 1;
     for entry in &ctx.next {
         if y >= area.y + area.height {
             break;
         }
-        let row = Rect { y, height: 1, ..area };
+        let row = Rect {
+            y,
+            height: 1,
+            ..area
+        };
         frame.render_widget(Paragraph::new(queue_entry_line(entry)), row);
         y += 1;
     }
@@ -290,7 +294,12 @@ fn draw_empty(frame: &mut Frame) {
     frame.render_widget(Paragraph::new(hints), rows[3]);
 }
 
-fn progress_bar_width(content_width: u16, progress_secs: i64, duration_secs: i64, volume: Option<u32>) -> usize {
+fn progress_bar_width(
+    content_width: u16,
+    progress_secs: i64,
+    duration_secs: i64,
+    volume: Option<u32>,
+) -> usize {
     let left_len = ui::format_duration(progress_secs).len();
     let right_len = ui::format_duration(duration_secs).len();
     let vol_len = volume.map(|v| format!("  vol {v}%").len()).unwrap_or(0);
@@ -328,8 +337,14 @@ fn build_progress_line<'a>(
         Span::styled(left, Style::new().fg(Color::White)),
         Span::raw(" "),
         Span::styled("\u{2501}".repeat(filled), Style::new().fg(ACCENT)),
-        Span::styled("\u{25cf}", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-        Span::styled("\u{2500}".repeat(remaining), Style::new().fg(SEPARATOR_COLOR)),
+        Span::styled(
+            "\u{25cf}",
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "\u{2500}".repeat(remaining),
+            Style::new().fg(SEPARATOR_COLOR),
+        ),
         Span::raw(" "),
         Span::styled(right, Style::new().fg(Color::DarkGray)),
         Span::styled(vol_label, Style::new().fg(Color::DarkGray)),
@@ -646,9 +661,18 @@ fn run_player_loop(
                     }
                 }
 
-                let state = (elapsed_secs, elapsed_secs, track.is_playing, track.volume_percent);
+                let state = (
+                    elapsed_secs,
+                    elapsed_secs,
+                    track.is_playing,
+                    track.volume_percent,
+                );
                 if needs_redraw || last_drawn.as_ref() != Some(&state) {
-                    let qctx = if show_queue { queue_context.as_ref() } else { None };
+                    let qctx = if show_queue {
+                        queue_context.as_ref()
+                    } else {
+                        None
+                    };
                     terminal.draw(|frame| {
                         draw_playing(
                             frame,
@@ -672,5 +696,75 @@ fn run_player_loop(
         }
 
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+    use std::time::Instant;
+
+    fn track(
+        progress_ms: i64,
+        duration_secs: i64,
+        is_playing: bool,
+        volume: Option<u32>,
+    ) -> TrackInfo {
+        TrackInfo {
+            title: "Test".to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            duration_secs,
+            progress_ms,
+            is_playing,
+            volume_percent: volume,
+        }
+    }
+
+    #[test]
+    fn progress_paused() {
+        let t = track(30_000, 240, false, None);
+        let anchor = Instant::now();
+        assert_eq!(current_progress_ms(&t, anchor), 30_000);
+    }
+
+    #[test]
+    fn progress_playing() {
+        let t = track(30_000, 240, true, None);
+        let anchor = Instant::now();
+        let result = current_progress_ms(&t, anchor);
+        assert!(result >= 30_000);
+    }
+
+    #[test]
+    fn progress_clamps_to_duration() {
+        let t = track(239_990, 240, true, None);
+        let anchor = Instant::now();
+        std::thread::sleep(Duration::from_millis(50));
+        let result = current_progress_ms(&t, anchor);
+        assert!(result <= 240 * 1000);
+    }
+
+    #[test]
+    fn progress_bar_width_with_volume() {
+        // progress "1:05" (len=4), duration "4:00" (len=4), vol "  vol 75%" (len=9)
+        // label_width = 2 + 4 + 1 + 1 + 4 + 9 = 21
+        let w = progress_bar_width(80, 65, 240, Some(75));
+        assert_eq!(w, 80 - 21);
+    }
+
+    #[test]
+    fn progress_bar_width_no_volume() {
+        // label_width = 2 + 4 + 1 + 1 + 4 + 0 = 12
+        let w = progress_bar_width(80, 65, 240, None);
+        assert_eq!(w, 80 - 12);
+    }
+
+    #[test]
+    fn build_progress_line_span_count() {
+        let area = Rect::new(0, 0, 80, 1);
+        let line = build_progress_line(60_000, 240, true, Some(50), area);
+        assert_eq!(line.spans.len(), 9);
     }
 }

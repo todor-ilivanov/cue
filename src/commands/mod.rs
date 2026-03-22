@@ -49,3 +49,40 @@ pub fn api_error(err: ClientError, action: &str) -> anyhow::Error {
     }
     anyhow::Error::from(err).context(format!("failed to {action}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rspotify::model::SimplifiedArtist;
+
+    fn artist(name: &str) -> SimplifiedArtist {
+        SimplifiedArtist {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn join_artist_names_variants() {
+        assert_eq!(join_artist_names(&[artist("Radiohead")]), "Radiohead");
+        assert_eq!(
+            join_artist_names(&[artist("A"), artist("B"), artist("C")]),
+            "A, B, C"
+        );
+        assert_eq!(join_artist_names(&[]), "");
+    }
+
+    #[test]
+    fn release_year_extracts_four_chars() {
+        assert_eq!(release_year(Some("2024-01-15")), Some("2024"));
+        assert_eq!(release_year(Some("2024")), Some("2024"));
+    }
+
+    #[test]
+    fn release_year_edge_cases() {
+        assert_eq!(release_year(Some("abcd")), Some("abcd"));
+        assert_eq!(release_year(Some("abc")), None);
+        assert_eq!(release_year(Some("")), None);
+        assert_eq!(release_year(None), None);
+    }
+}

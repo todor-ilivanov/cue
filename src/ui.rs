@@ -292,4 +292,26 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn pick_result_suffix_variant() {
+        let candidates = vec![
+            PickCandidate {
+                name: "Creep".to_string(),
+                label: "Creep — Radiohead".to_string(),
+                popularity: Some(80),
+            },
+            PickCandidate {
+                name: "Creep - Acoustic".to_string(),
+                label: "Creep - Acoustic — Radiohead".to_string(),
+                popularity: Some(30),
+            },
+            PickCandidate {
+                name: "Creep (Live)".to_string(),
+                label: "Creep (Live) — Radiohead".to_string(),
+                popularity: Some(50),
+            },
+        ];
+        assert_eq!(pick_result("creep", candidates, "Pick", false).unwrap(), 0);
+    }
 }

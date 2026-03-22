@@ -178,3 +178,68 @@ fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
     println!("{} ({})", device.name, device_type_label(&device._type));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(name: &str, dtype: DeviceType) -> Device {
+        Device {
+            id: Some("id".to_string()),
+            is_active: false,
+            is_private_session: false,
+            is_restricted: false,
+            name: name.to_string(),
+            _type: dtype,
+            volume_percent: Some(50),
+        }
+    }
+
+    #[test]
+    fn device_type_labels() {
+        assert_eq!(device_type_label(&DeviceType::Computer), "computer");
+        assert_eq!(device_type_label(&DeviceType::Tv), "TV");
+        assert_eq!(device_type_label(&DeviceType::Speaker), "speaker");
+        assert_eq!(device_type_label(&DeviceType::GameConsole), "game console");
+    }
+
+    #[test]
+    fn normalize_strips_and_lowercases() {
+        assert_eq!(normalize("MacBook Pro"), "macbookpro");
+        assert_eq!(normalize("my-comp.local"), "mycomplocal");
+        assert_eq!(normalize(""), "");
+        assert_eq!(normalize("ABC 123"), "abc123");
+    }
+
+    #[test]
+    fn pick_best_device_single_computer() {
+        let devices = vec![
+            device("Speaker", DeviceType::Speaker),
+            device("My Computer", DeviceType::Computer),
+        ];
+        let best = pick_best_device(&devices);
+        assert_eq!(best.name, "My Computer");
+    }
+
+    #[test]
+    fn pick_best_device_no_computers() {
+        let devices = vec![
+            device("Kitchen Speaker", DeviceType::Speaker),
+            device("iPhone", DeviceType::Smartphone),
+        ];
+        let best = pick_best_device(&devices);
+        assert_eq!(best.name, "Kitchen Speaker");
+    }
+
+    #[test]
+    fn pick_best_device_multiple_computers() {
+        let devices = vec![
+            device("zzztesthost999alpha", DeviceType::Computer),
+            device("zzztesthost999beta", DeviceType::Computer),
+            device("Speaker", DeviceType::Speaker),
+        ];
+        let best = pick_best_device(&devices);
+        // Either hostname matches one, or falls through to first device
+        assert_eq!(best._type, DeviceType::Computer);
+    }
+}
