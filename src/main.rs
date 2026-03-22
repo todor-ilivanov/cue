@@ -73,13 +73,13 @@ Examples:
     },
     /// List available playback devices
     Devices,
-    /// Transfer playback to a device (interactive picker if no name given)
+    /// Show active device, or transfer to a named device
     #[command(after_help = "\
 Examples:
   cue device
   cue device macbook")]
     Device {
-        /// Device name (optional — omit for interactive picker)
+        /// Device name (optional — omit to show active device)
         name: Option<Vec<String>>,
     },
     /// Get or set playback volume (0-100)
@@ -128,6 +128,17 @@ fn main() -> Result<()> {
     }
 
     let spotify = client::build_client(auth::load_config()?)?;
+
+    let needs_device = !matches!(
+        cli.command,
+        Command::Devices
+            | Command::Device { .. }
+            | Command::Search { .. }
+            | Command::Completions { .. }
+    );
+    if needs_device {
+        commands::devices::ensure_device(&spotify)?;
+    }
 
     match cli.command {
         Command::Play {

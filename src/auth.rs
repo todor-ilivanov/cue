@@ -80,27 +80,6 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(base.join("cue"))
 }
 
-pub fn load_last_device() -> Result<Option<String>> {
-    let path = config_dir()?.join("last_device");
-    match fs::read_to_string(&path) {
-        Ok(s) => {
-            let id = s.trim().to_owned();
-            if id.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(id))
-            }
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("could not read last_device: {}", path.display())),
-    }
-}
-
-pub fn save_last_device(device_id: &str) -> Result<()> {
-    let path = config_dir()?.join("last_device");
-    write_secure_file(&path, device_id.as_bytes())
-}
-
 pub fn load_config() -> Result<Config> {
     let dir = config_dir()?;
     fs::create_dir_all(&dir)

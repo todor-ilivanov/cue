@@ -38,7 +38,7 @@ fn get_volume(spotify: &AuthCodeSpotify) -> Result<u32> {
 
     let vol = playback
         .and_then(|p| p.device.volume_percent)
-        .context("no active device — use `cue device` to select one")?;
+        .context("no active device — open Spotify on a device first")?;
 
     Ok(vol)
 }
