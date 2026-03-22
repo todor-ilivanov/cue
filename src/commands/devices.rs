@@ -67,12 +67,12 @@ pub fn devices(spotify: &AuthCodeSpotify) -> Result<()> {
 /// Prefers a Computer matching the local hostname, then any single Computer,
 /// then the first available device.
 pub fn ensure_device(spotify: &AuthCodeSpotify) -> Result<()> {
-    let playback = spotify
-        .current_playback(None, None::<&[_]>)
-        .context("failed to check current playback")?;
-
-    if playback.and_then(|p| p.device.id).is_some() {
-        return Ok(());
+    match spotify.current_playback(None, None::<&[_]>) {
+        Ok(Some(pb)) if pb.device.id.is_some() => return Ok(()),
+        Ok(_) => {}
+        // Non-empty response that failed to parse (e.g. null shuffle_state) means a device is active
+        Err(rspotify::ClientError::ParseJson(_)) => return Ok(()),
+        Err(e) => return Err(anyhow::Error::from(e).context("failed to check current playback")),
     }
 
     let devices = fetch_devices_silent(spotify)?;
@@ -155,12 +155,8 @@ fn transfer_by_name(spotify: &AuthCodeSpotify, name: &str) -> Result<()> {
 }
 
 fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
-    let playback = spotify
-        .current_playback(None, None::<&[_]>)
-        .context("failed to check current playback")?;
-
-    if let Some(ctx) = playback {
-        if ctx.device.id.is_some() {
+    match spotify.current_playback(None, None::<&[_]>) {
+        Ok(Some(ctx)) if ctx.device.id.is_some() => {
             println!(
                 "{} ({})",
                 ctx.device.name,
@@ -168,6 +164,10 @@ fn show_active_device(spotify: &AuthCodeSpotify) -> Result<()> {
             );
             return Ok(());
         }
+        Ok(_) => {}
+        // Non-empty response that failed to parse — fall through to device discovery
+        Err(rspotify::ClientError::ParseJson(_)) => {}
+        Err(e) => return Err(anyhow::Error::from(e).context("failed to check current playback")),
     }
 
     // No active device — auto-resolve one

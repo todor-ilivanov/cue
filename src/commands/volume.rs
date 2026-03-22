@@ -31,16 +31,18 @@ fn set_volume(spotify: &AuthCodeSpotify, input: &str) -> Result<()> {
 
 fn get_volume(spotify: &AuthCodeSpotify) -> Result<u32> {
     let playback = ui::with_spinner("Fetching volume...", || {
-        spotify
-            .current_playback(None, None::<&[_]>)
-            .context("failed to get current playback")
+        match spotify.current_playback(None, None::<&[_]>) {
+            Ok(pb) => Ok(pb),
+            Err(rspotify::ClientError::ParseJson(_)) => {
+                bail!("could not read volume — try again or restart Spotify")
+            }
+            Err(e) => Err(anyhow::Error::from(e).context("failed to get current playback")),
+        }
     })?;
 
-    let vol = playback
+    playback
         .and_then(|p| p.device.volume_percent)
-        .context("no active device — open Spotify on a device first")?;
-
-    Ok(vol)
+        .context("no active device — open Spotify on a device first")
 }
 
 fn parse_level(spotify: &AuthCodeSpotify, input: &str) -> Result<u8> {
