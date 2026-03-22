@@ -5,12 +5,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use rspotify::model::PlayableItem;
+use rspotify::model::{PlayableId, PlayableItem, SearchResult, SearchType, TrackId};
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
-use super::join_artist_names;
 use super::queue::{fetch_queue_context, QueueContext, SongEntry};
+use super::{api_error, join_artist_names};
 use crate::lyrics::{self, LyricsState};
 use crate::ui;
 
@@ -20,6 +20,28 @@ use std::time::{Duration, Instant};
 // Amber/gold accent palette
 const ACCENT: Color = Color::Rgb(255, 191, 0);
 const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
+
+struct SearchResultEntry {
+    title: String,
+    artist: String,
+    track_id: TrackId<'static>,
+}
+
+enum PlayerMode {
+    Normal,
+    SearchInput {
+        query: String,
+    },
+    SearchLoading {
+        query: String,
+    },
+    SearchResults {
+        #[allow(dead_code)]
+        query: String,
+        results: Vec<SearchResultEntry>,
+        selected: usize,
+    },
+}
 
 struct TrackInfo {
     title: String,
@@ -136,6 +158,16 @@ fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
     }
 }
 
+fn content_rect(area: Rect) -> Rect {
+    let max_width = 80u16;
+    if area.width > max_width {
+        let margin = (area.width - max_width) / 2;
+        Rect::new(area.x + margin, area.y, max_width, area.height)
+    } else {
+        area
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_playing(
     frame: &mut Frame,
@@ -147,14 +179,7 @@ fn draw_playing(
     queue_context: Option<&QueueContext>,
     status_message: Option<&str>,
 ) {
-    let area = frame.area();
-    let max_width = 80u16;
-    let content_area = if area.width > max_width {
-        let margin = (area.width - max_width) / 2;
-        Rect::new(area.x + margin, area.y, max_width, area.height)
-    } else {
-        area
-    };
+    let content_area = content_rect(frame.area());
     let height = content_area.height;
     let width = content_area.width;
 
@@ -274,6 +299,131 @@ fn draw_playing(
     frame.render_widget(Paragraph::new(hints), rows[hints_row]);
 }
 
+fn perform_search(
+    spotify: &AuthCodeSpotify,
+    query: &str,
+) -> Result<Vec<SearchResultEntry>, String> {
+    let result = spotify
+        .search(query, SearchType::Track, None, None, Some(5), None)
+        .map_err(|e| format!("search failed: {e}"))?;
+
+    let tracks = match result {
+        SearchResult::Tracks(page) => page,
+        _ => return Err("unexpected search result type".to_string()),
+    };
+
+    let entries: Vec<SearchResultEntry> = tracks
+        .items
+        .into_iter()
+        .filter_map(|t| {
+            let id = t.id?;
+            Some(SearchResultEntry {
+                title: t.name,
+                artist: join_artist_names(&t.artists),
+                track_id: id,
+            })
+        })
+        .collect();
+
+    if entries.is_empty() {
+        Err(format!("no results for \"{query}\""))
+    } else {
+        Ok(entries)
+    }
+}
+
+fn draw_search_input_bar(frame: &mut Frame, query: &str) {
+    let content = content_rect(frame.area());
+    let hints_area = Rect {
+        y: content.y + content.height.saturating_sub(1),
+        height: 1,
+        ..content
+    };
+
+    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
+
+    let left = vec![
+        Span::styled("/ ", key_style),
+        Span::styled(query.to_string(), Style::new().fg(Color::White)),
+        Span::styled("_", Style::new().fg(Color::DarkGray)),
+    ];
+    let left_width = 2 + query.len() + 1;
+
+    let right_parts = vec![
+        Span::styled("Enter", key_style),
+        Span::styled(" search  ", desc_style),
+        Span::styled("Esc", key_style),
+        Span::styled(" cancel", desc_style),
+    ];
+    let right_width: usize = "Enter search  Esc cancel".len();
+
+    let padding = (hints_area.width as usize).saturating_sub(left_width + right_width);
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(padding)));
+    spans.extend(right_parts);
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), hints_area);
+}
+
+fn draw_search_loading_overlay(frame: &mut Frame) {
+    let content = content_rect(frame.area());
+    let mid_y = content.y + content.height / 2;
+    let row = Rect {
+        y: mid_y,
+        height: 1,
+        ..content
+    };
+    let text = Line::from(Span::styled(
+        "Searching...",
+        Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+    ));
+    frame.render_widget(Paragraph::new(text), row);
+}
+
+fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry], selected: usize) {
+    let content = content_rect(frame.area());
+    let compact = content.height < 10;
+    let top_margin: u16 = if content.height > 12 { 1 } else { 0 };
+    let card_height: u16 = top_margin + 1 + 1 + if compact { 0 } else { 1 } + 1 + 1;
+    let bottom_reserve = 2u16;
+    let start_y = content.y + card_height;
+    let available = content.height.saturating_sub(card_height + bottom_reserve);
+
+    for (i, entry) in results.iter().enumerate() {
+        if i as u16 >= available {
+            break;
+        }
+        let row = Rect {
+            y: start_y + i as u16,
+            height: 1,
+            ..content
+        };
+        let is_selected = i == selected;
+        let prefix = if is_selected { "\u{25b6} " } else { "  " };
+        let num = format!("{}. ", i + 1);
+        let (title_style, artist_style) = if is_selected {
+            (
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::new().fg(ACCENT),
+            )
+        } else {
+            (
+                Style::new().fg(Color::DarkGray),
+                Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            )
+        };
+        let line = Line::from(vec![
+            Span::styled(prefix, title_style),
+            Span::styled(num, title_style),
+            Span::styled(&entry.title, title_style),
+            Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)),
+            Span::styled(&entry.artist, artist_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), row);
+    }
+}
+
 fn draw_empty(frame: &mut Frame) {
     let area = frame.area();
 
@@ -380,6 +530,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" sync  ", desc_style),
             Span::styled("q", key_style),
             Span::styled(" queue  ", desc_style),
+            Span::styled("/", key_style),
+            Span::styled(" srch  ", desc_style),
             Span::styled("esc", key_style),
             Span::styled(" quit", desc_style),
         ])
@@ -399,6 +551,8 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" sync  ", desc_style),
             Span::styled("q", key_style),
             Span::styled(" queue  ", desc_style),
+            Span::styled("/", key_style),
+            Span::styled(" search  ", desc_style),
             Span::styled("esc", key_style),
             Span::styled(" quit", desc_style),
         ])
@@ -469,6 +623,10 @@ fn run_player_loop(
     let mut show_queue = false;
     let mut queue_context: Option<QueueContext> = None;
 
+    // Search state
+    let mut mode = PlayerMode::Normal;
+    let mut search_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
+
     // Transient status message (auto-clears after 3 seconds)
     let mut status_message: Option<(String, Instant)> = None;
 
@@ -486,128 +644,239 @@ fn run_player_loop(
         // Process all pending key events
         while crossterm::event::poll(Duration::ZERO)? {
             match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('q') => {
-                        show_queue = !show_queue;
-                        if show_queue && queue_context.is_none() {
-                            if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
-                                queue_context = Some(ctx);
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    // Collect deferred actions to avoid borrow conflicts with mode
+                    let mut submit_search: Option<String> = None;
+                    let mut play_track_id: Option<TrackId<'static>> = None;
+
+                    match &mut mode {
+                        PlayerMode::Normal => match key.code {
+                            KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('/') => {
+                                mode = PlayerMode::SearchInput {
+                                    query: String::new(),
+                                };
+                                needs_redraw = true;
                             }
-                        }
-                        needs_redraw = true;
-                    }
-                    KeyCode::Char(' ') => {
-                        if let Some(ref mut t) = info {
-                            if t.is_playing {
-                                if let Err(e) = spotify.pause_playback(None) {
-                                    status_message =
-                                        Some((format!("pause failed: {e}"), Instant::now()));
-                                } else {
-                                    t.is_playing = false;
-                                }
-                            } else {
-                                if let Err(e) = spotify.resume_playback(None, None) {
-                                    status_message =
-                                        Some((format!("resume failed: {e}"), Instant::now()));
-                                } else {
-                                    t.is_playing = true;
-                                }
-                            }
-                            fetch_anchor = Instant::now();
-                            needs_redraw = true;
-                        }
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('p') => {
-                        let result = if key.code == KeyCode::Char('n') {
-                            spotify.next_track(None)
-                        } else {
-                            spotify.previous_track(None)
-                        };
-                        if let Err(e) = result {
-                            let action = if key.code == KeyCode::Char('n') {
-                                "next"
-                            } else {
-                                "prev"
-                            };
-                            status_message =
-                                Some((format!("{action} failed: {e}"), Instant::now()));
-                        } else {
-                            deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
-                        }
-                        needs_redraw = true;
-                    }
-                    KeyCode::Left | KeyCode::Right => {
-                        if let Some(ref mut t) = info {
-                            let delta_ms = if key.code == KeyCode::Right {
-                                5000
-                            } else {
-                                -5000
-                            };
-                            let current_ms = current_progress_ms(t, fetch_anchor);
-                            let new_ms = (current_ms + delta_ms).clamp(0, t.duration_secs * 1000);
-                            let pos = chrono::Duration::milliseconds(new_ms);
-                            if let Err(e) = spotify.seek_track(pos, None) {
-                                status_message =
-                                    Some((format!("seek failed: {e}"), Instant::now()));
-                            } else {
-                                t.progress_ms = new_ms;
-                                fetch_anchor = Instant::now();
-                            }
-                            needs_redraw = true;
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Down => {
-                        if let Some(ref mut t) = info {
-                            if let Some(current_vol) = t.volume_percent {
-                                let delta: i32 = if key.code == KeyCode::Up { 5 } else { -5 };
-                                let new_vol = (current_vol as i32 + delta).clamp(0, 100) as u8;
-                                if let Err(e) = spotify.volume(new_vol, None) {
-                                    status_message =
-                                        Some((format!("volume failed: {e}"), Instant::now()));
-                                } else {
-                                    t.volume_percent = Some(new_vol as u32);
+                            KeyCode::Char('q') => {
+                                show_queue = !show_queue;
+                                if show_queue && queue_context.is_none() {
+                                    if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
+                                        queue_context = Some(ctx);
+                                    }
                                 }
                                 needs_redraw = true;
                             }
-                        }
-                    }
-                    KeyCode::Char('l') => {
-                        show_lyrics = !show_lyrics;
-                        needs_redraw = true;
-                    }
-                    KeyCode::Char('j') | KeyCode::Char('k') => {
-                        if show_lyrics {
-                            if let LyricsState::Synced(ref synced) = lyrics_state {
-                                let current = lyrics_scroll_center.unwrap_or_else(|| {
-                                    info.as_ref()
-                                        .map(|t| {
-                                            let pm = current_progress_ms(t, fetch_anchor) as u64;
-                                            synced.active_line_index(pm).unwrap_or(0)
-                                        })
-                                        .unwrap_or(0)
-                                });
-                                let max_line = synced.lines.len().saturating_sub(1);
-                                lyrics_scroll_center = Some(if key.code == KeyCode::Char('j') {
-                                    current.saturating_add(1).min(max_line)
+                            KeyCode::Char(' ') => {
+                                if let Some(ref mut t) = info {
+                                    if t.is_playing {
+                                        if let Err(e) = spotify.pause_playback(None) {
+                                            status_message = Some((
+                                                format!("pause failed: {e}"),
+                                                Instant::now(),
+                                            ));
+                                        } else {
+                                            t.is_playing = false;
+                                        }
+                                    } else {
+                                        if let Err(e) = spotify.resume_playback(None, None) {
+                                            status_message = Some((
+                                                format!("resume failed: {e}"),
+                                                Instant::now(),
+                                            ));
+                                        } else {
+                                            t.is_playing = true;
+                                        }
+                                    }
+                                    fetch_anchor = Instant::now();
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('p') => {
+                                let result = if key.code == KeyCode::Char('n') {
+                                    spotify.next_track(None)
                                 } else {
-                                    current.saturating_sub(1)
-                                });
+                                    spotify.previous_track(None)
+                                };
+                                if let Err(e) = result {
+                                    let action = if key.code == KeyCode::Char('n') {
+                                        "next"
+                                    } else {
+                                        "prev"
+                                    };
+                                    status_message =
+                                        Some((format!("{action} failed: {e}"), Instant::now()));
+                                } else {
+                                    deferred_fetch =
+                                        Some(Instant::now() + Duration::from_millis(800));
+                                }
+                                needs_redraw = true;
+                            }
+                            KeyCode::Left | KeyCode::Right => {
+                                if let Some(ref mut t) = info {
+                                    let delta_ms = if key.code == KeyCode::Right {
+                                        5000
+                                    } else {
+                                        -5000
+                                    };
+                                    let current_ms = current_progress_ms(t, fetch_anchor);
+                                    let new_ms =
+                                        (current_ms + delta_ms).clamp(0, t.duration_secs * 1000);
+                                    let pos = chrono::Duration::milliseconds(new_ms);
+                                    if let Err(e) = spotify.seek_track(pos, None) {
+                                        status_message =
+                                            Some((format!("seek failed: {e}"), Instant::now()));
+                                    } else {
+                                        t.progress_ms = new_ms;
+                                        fetch_anchor = Instant::now();
+                                    }
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Up | KeyCode::Down => {
+                                if let Some(ref mut t) = info {
+                                    if let Some(current_vol) = t.volume_percent {
+                                        let delta: i32 =
+                                            if key.code == KeyCode::Up { 5 } else { -5 };
+                                        let new_vol =
+                                            (current_vol as i32 + delta).clamp(0, 100) as u8;
+                                        if let Err(e) = spotify.volume(new_vol, None) {
+                                            status_message = Some((
+                                                format!("volume failed: {e}"),
+                                                Instant::now(),
+                                            ));
+                                        } else {
+                                            t.volume_percent = Some(new_vol as u32);
+                                        }
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                            KeyCode::Char('l') => {
+                                show_lyrics = !show_lyrics;
+                                needs_redraw = true;
+                            }
+                            KeyCode::Char('j') | KeyCode::Char('k') => {
+                                if show_lyrics {
+                                    if let LyricsState::Synced(ref synced) = lyrics_state {
+                                        let current = lyrics_scroll_center.unwrap_or_else(|| {
+                                            info.as_ref()
+                                                .map(|t| {
+                                                    let pm =
+                                                        current_progress_ms(t, fetch_anchor) as u64;
+                                                    synced.active_line_index(pm).unwrap_or(0)
+                                                })
+                                                .unwrap_or(0)
+                                        });
+                                        let max_line = synced.lines.len().saturating_sub(1);
+                                        lyrics_scroll_center =
+                                            Some(if key.code == KeyCode::Char('j') {
+                                                current.saturating_add(1).min(max_line)
+                                            } else {
+                                                current.saturating_sub(1)
+                                            });
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                            KeyCode::Char('s') => {
+                                if lyrics_scroll_center.is_some() {
+                                    lyrics_scroll_center = None;
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                last_fetch = Instant::now() - poll_interval;
+                            }
+                            _ => {}
+                        },
+                        PlayerMode::SearchInput { query } => match key.code {
+                            KeyCode::Char(c) => {
+                                query.push(c);
+                                needs_redraw = true;
+                            }
+                            KeyCode::Backspace => {
+                                query.pop();
+                                needs_redraw = true;
+                            }
+                            KeyCode::Enter => {
+                                if !query.is_empty() {
+                                    submit_search = Some(query.clone());
+                                }
+                            }
+                            KeyCode::Esc => {
+                                mode = PlayerMode::Normal;
+                                needs_redraw = true;
+                            }
+                            _ => {}
+                        },
+                        PlayerMode::SearchLoading { .. } => {
+                            if key.code == KeyCode::Esc {
+                                search_rx = None;
+                                mode = PlayerMode::Normal;
                                 needs_redraw = true;
                             }
                         }
+                        PlayerMode::SearchResults {
+                            results, selected, ..
+                        } => match key.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                *selected = selected.saturating_sub(1);
+                                needs_redraw = true;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                *selected = (*selected + 1).min(results.len().saturating_sub(1));
+                                needs_redraw = true;
+                            }
+                            KeyCode::Enter => {
+                                play_track_id = Some(results[*selected].track_id.clone());
+                            }
+                            KeyCode::Char(c @ '1'..='9') => {
+                                let idx = (c as usize) - ('1' as usize);
+                                if idx < results.len() {
+                                    play_track_id = Some(results[idx].track_id.clone());
+                                }
+                            }
+                            KeyCode::Esc => {
+                                mode = PlayerMode::Normal;
+                                needs_redraw = true;
+                            }
+                            _ => {}
+                        },
                     }
-                    KeyCode::Char('s') => {
-                        if lyrics_scroll_center.is_some() {
-                            lyrics_scroll_center = None;
-                            needs_redraw = true;
+
+                    // Handle deferred search submission (avoids borrow conflict)
+                    if let Some(q) = submit_search {
+                        let sp = spotify.clone();
+                        let query = q.clone();
+                        let (tx, rx) = mpsc::channel();
+                        search_rx = Some(rx);
+                        std::thread::spawn(move || {
+                            let result = perform_search(&sp, &query);
+                            let _ = tx.send(result);
+                        });
+                        mode = PlayerMode::SearchLoading { query: q };
+                        needs_redraw = true;
+                    }
+
+                    // Handle deferred track play (avoids borrow conflict)
+                    if let Some(track_id) = play_track_id {
+                        let playable = PlayableId::Track(track_id);
+                        match spotify.start_uris_playback([playable], None, None, None) {
+                            Err(e) => {
+                                status_message = Some((
+                                    format!("{}", api_error(e, "start playback")),
+                                    Instant::now(),
+                                ));
+                            }
+                            Ok(()) => {
+                                deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
+                            }
                         }
+                        mode = PlayerMode::Normal;
+                        needs_redraw = true;
                     }
-                    KeyCode::Char('r') => {
-                        last_fetch = Instant::now() - poll_interval;
-                    }
-                    _ => {}
-                },
+                }
                 Event::Resize(_, _) => {
                     needs_redraw = true;
                 }
@@ -686,10 +955,42 @@ fn run_player_loop(
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    // catch_unwind ensures tx.send() always runs, so this is
-                    // only reachable if panic=abort or the thread is killed.
                     lyrics_state = LyricsState::None;
                     lyrics_rx = None;
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        // Check for search result.
+        if let Some(ref rx) = search_rx {
+            match rx.try_recv() {
+                Ok(Ok(results)) => {
+                    search_rx = None;
+                    if let PlayerMode::SearchLoading { query } = &mode {
+                        mode = PlayerMode::SearchResults {
+                            query: query.clone(),
+                            results,
+                            selected: 0,
+                        };
+                    }
+                    needs_redraw = true;
+                }
+                Ok(Err(msg)) => {
+                    search_rx = None;
+                    status_message = Some((msg, Instant::now()));
+                    if let PlayerMode::SearchLoading { query } = &mode {
+                        mode = PlayerMode::SearchInput {
+                            query: query.clone(),
+                        };
+                    }
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    search_rx = None;
+                    status_message = Some(("search failed".to_string(), Instant::now()));
+                    mode = PlayerMode::Normal;
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -720,23 +1021,50 @@ fn run_player_loop(
                     track.is_playing,
                     track.volume_percent,
                 );
-                if needs_redraw || last_drawn.as_ref() != Some(&state) {
-                    let qctx = if show_queue {
-                        queue_context.as_ref()
+                if needs_redraw
+                    || last_drawn.as_ref() != Some(&state)
+                    || !matches!(mode, PlayerMode::Normal)
+                {
+                    // Suppress lyrics/queue during search modes
+                    let (effective_lyrics, effective_queue) = if matches!(mode, PlayerMode::Normal)
+                    {
+                        (
+                            show_lyrics,
+                            if show_queue {
+                                queue_context.as_ref()
+                            } else {
+                                None
+                            },
+                        )
                     } else {
-                        None
+                        (false, None)
                     };
+
                     terminal.draw(|frame| {
                         draw_playing(
                             frame,
                             track,
                             progress_ms,
                             &lyrics_state,
-                            show_lyrics,
+                            effective_lyrics,
                             lyrics_scroll_center,
-                            qctx,
+                            effective_queue,
                             status_message.as_ref().map(|(msg, _)| msg.as_str()),
                         );
+                        match &mode {
+                            PlayerMode::SearchInput { query } => {
+                                draw_search_input_bar(frame, query);
+                            }
+                            PlayerMode::SearchLoading { .. } => {
+                                draw_search_loading_overlay(frame);
+                            }
+                            PlayerMode::SearchResults {
+                                results, selected, ..
+                            } => {
+                                draw_search_results_overlay(frame, results, *selected);
+                            }
+                            PlayerMode::Normal => {}
+                        }
                     })?;
                     last_drawn = Some(state);
                 }
