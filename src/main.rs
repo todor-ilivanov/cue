@@ -174,7 +174,7 @@ fn main() -> Result<()> {
                 commands::queue::queue_add(&spotify, &query, pick)?;
             }
         }
-        Command::Completions { .. } => unreachable!(),
+        Command::Completions { .. } => {} // handled by early return above
     }
 
     client::persist_token(&spotify)?;

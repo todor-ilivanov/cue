@@ -51,9 +51,9 @@ fn write_secure_file(path: &std::path::Path, data: &[u8]) -> Result<()> {
         .truncate(true)
         .mode(0o600)
         .open(path)
-        .with_context(|| format!("could not write {}", path.display()))?
+        .with_context(|| format!("could not open {}", path.display()))?
         .write_all(data)
-        .with_context(|| format!("could not write {}", path.display()))
+        .with_context(|| format!("could not write to {}", path.display()))
 }
 
 pub fn save_token(token: &Token) -> Result<()> {

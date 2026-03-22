@@ -136,6 +136,10 @@ fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
         .accept()
         .context("failed to accept OAuth callback")?;
 
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .context("failed to set read timeout on callback stream")?;
+
     let mut buf = [0u8; 4096];
     let n = stream
         .read(&mut buf)

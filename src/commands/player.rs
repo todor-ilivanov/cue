@@ -136,6 +136,7 @@ fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_playing(
     frame: &mut Frame,
     info: &TrackInfo,
@@ -144,6 +145,7 @@ fn draw_playing(
     show_lyrics: bool,
     lyrics_scroll_center: Option<usize>,
     queue_context: Option<&QueueContext>,
+    status_message: Option<&str>,
 ) {
     let area = frame.area();
     let max_width = 80u16;
@@ -259,6 +261,12 @@ fn draw_playing(
             progress_ms as u64,
             lyrics_scroll_center,
         );
+    }
+
+    // Status message (transient, in blank line above hints)
+    if let Some(msg) = status_message {
+        let status_line = Line::from(Span::styled(msg, Style::new().fg(Color::Red)));
+        frame.render_widget(Paragraph::new(status_line), rows[lyrics_row + 1]);
     }
 
     // Hints
@@ -403,16 +411,26 @@ pub fn player(spotify: &AuthCodeSpotify, slim: bool) -> Result<()> {
     }
 
     crossterm::terminal::enable_raw_mode().context("failed to enable raw mode")?;
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(
-        stdout,
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::cursor::Hide
-    )
-    .context("failed to enter alternate screen")?;
 
-    let backend = ratatui::backend::CrosstermBackend::new(stdout);
-    let mut terminal = ratatui::Terminal::new(backend).context("failed to create terminal")?;
+    let setup_result = (|| {
+        let mut stdout = std::io::stdout();
+        crossterm::execute!(
+            stdout,
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::cursor::Hide
+        )
+        .context("failed to enter alternate screen")?;
+        let backend = ratatui::backend::CrosstermBackend::new(stdout);
+        ratatui::Terminal::new(backend).context("failed to create terminal")
+    })();
+
+    let mut terminal = match setup_result {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = crossterm::terminal::disable_raw_mode();
+            return Err(e);
+        }
+    };
 
     let result = run_player_loop(&mut terminal, spotify, slim);
 
@@ -451,8 +469,19 @@ fn run_player_loop(
     let mut show_queue = false;
     let mut queue_context: Option<QueueContext> = None;
 
+    // Transient status message (auto-clears after 3 seconds)
+    let mut status_message: Option<(String, Instant)> = None;
+
     loop {
         let mut needs_redraw = false;
+
+        // Clear expired status message
+        if let Some((_, when)) = &status_message {
+            if when.elapsed() > Duration::from_secs(3) {
+                status_message = None;
+                needs_redraw = true;
+            }
+        }
 
         // Process all pending key events
         while crossterm::event::poll(Duration::ZERO)? {
@@ -471,23 +500,41 @@ fn run_player_loop(
                     KeyCode::Char(' ') => {
                         if let Some(ref mut t) = info {
                             if t.is_playing {
-                                let _ = spotify.pause_playback(None);
-                                t.is_playing = false;
+                                if let Err(e) = spotify.pause_playback(None) {
+                                    status_message =
+                                        Some((format!("pause failed: {e}"), Instant::now()));
+                                } else {
+                                    t.is_playing = false;
+                                }
                             } else {
-                                let _ = spotify.resume_playback(None, None);
-                                t.is_playing = true;
+                                if let Err(e) = spotify.resume_playback(None, None) {
+                                    status_message =
+                                        Some((format!("resume failed: {e}"), Instant::now()));
+                                } else {
+                                    t.is_playing = true;
+                                }
                             }
                             fetch_anchor = Instant::now();
                             needs_redraw = true;
                         }
                     }
                     KeyCode::Char('n') | KeyCode::Char('p') => {
-                        let _ = if key.code == KeyCode::Char('n') {
+                        let result = if key.code == KeyCode::Char('n') {
                             spotify.next_track(None)
                         } else {
                             spotify.previous_track(None)
                         };
-                        deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
+                        if let Err(e) = result {
+                            let action = if key.code == KeyCode::Char('n') {
+                                "next"
+                            } else {
+                                "prev"
+                            };
+                            status_message =
+                                Some((format!("{action} failed: {e}"), Instant::now()));
+                        } else {
+                            deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
+                        }
                         needs_redraw = true;
                     }
                     KeyCode::Left | KeyCode::Right => {
@@ -500,11 +547,14 @@ fn run_player_loop(
                             let current_ms = current_progress_ms(t, fetch_anchor);
                             let new_ms = (current_ms + delta_ms).clamp(0, t.duration_secs * 1000);
                             let pos = chrono::Duration::milliseconds(new_ms);
-                            if spotify.seek_track(pos, None).is_ok() {
+                            if let Err(e) = spotify.seek_track(pos, None) {
+                                status_message =
+                                    Some((format!("seek failed: {e}"), Instant::now()));
+                            } else {
                                 t.progress_ms = new_ms;
                                 fetch_anchor = Instant::now();
-                                needs_redraw = true;
                             }
+                            needs_redraw = true;
                         }
                     }
                     KeyCode::Up | KeyCode::Down => {
@@ -512,10 +562,13 @@ fn run_player_loop(
                             if let Some(current_vol) = t.volume_percent {
                                 let delta: i32 = if key.code == KeyCode::Up { 5 } else { -5 };
                                 let new_vol = (current_vol as i32 + delta).clamp(0, 100) as u8;
-                                if spotify.volume(new_vol, None).is_ok() {
+                                if let Err(e) = spotify.volume(new_vol, None) {
+                                    status_message =
+                                        Some((format!("volume failed: {e}"), Instant::now()));
+                                } else {
                                     t.volume_percent = Some(new_vol as u32);
-                                    needs_redraw = true;
                                 }
+                                needs_redraw = true;
                             }
                         }
                     }
@@ -682,6 +735,7 @@ fn run_player_loop(
                             show_lyrics,
                             lyrics_scroll_center,
                             qctx,
+                            status_message.as_ref().map(|(msg, _)| msg.as_str()),
                         );
                     })?;
                     last_drawn = Some(state);

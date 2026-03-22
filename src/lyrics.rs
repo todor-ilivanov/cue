@@ -63,14 +63,16 @@ fn build_agent() -> ureq::Agent {
         let _ = root_store.add(cert);
     }
     if !root_store.is_empty() {
-        let tls_config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
+        if let Ok(config_builder) = rustls::ClientConfig::builder_with_provider(
+            std::sync::Arc::new(rustls::crypto::ring::default_provider()),
+        )
         .with_safe_default_protocol_versions()
-        .expect("ring provider supports default TLS versions")
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-        builder = builder.tls_config(std::sync::Arc::new(tls_config));
+        {
+            let tls_config = config_builder
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            builder = builder.tls_config(std::sync::Arc::new(tls_config));
+        }
     }
 
     if let Ok(url) = std::env::var("https_proxy").or_else(|_| std::env::var("HTTPS_PROXY")) {
