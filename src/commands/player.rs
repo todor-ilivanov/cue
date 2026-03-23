@@ -5,7 +5,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use rspotify::model::{PlayableId, PlayableItem, SearchResult, SearchType, TrackId};
+use rspotify::model::{
+    AlbumId, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult, SearchType, TrackId,
+};
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
@@ -21,23 +23,59 @@ use std::time::{Duration, Instant};
 const ACCENT: Color = Color::Rgb(255, 191, 0);
 const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchCategory {
+    Track,
+    Album,
+    Playlist,
+}
+
+impl SearchCategory {
+    fn next(self) -> Self {
+        match self {
+            Self::Track => Self::Album,
+            Self::Album => Self::Playlist,
+            Self::Playlist => Self::Track,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Track => "Track",
+            Self::Album => "Album",
+            Self::Playlist => "Playlist",
+        }
+    }
+}
+
+#[derive(Clone)]
+enum SearchPlayTarget {
+    Track(TrackId<'static>),
+    Album(AlbumId<'static>),
+    Playlist(PlaylistId<'static>),
+}
+
 struct SearchResultEntry {
     title: String,
-    artist: String,
-    track_id: TrackId<'static>,
+    subtitle: String,
+    target: SearchPlayTarget,
 }
 
 enum PlayerMode {
     Normal,
     SearchInput {
         query: String,
+        category: SearchCategory,
     },
     SearchLoading {
         query: String,
+        category: SearchCategory,
     },
     SearchResults {
         #[allow(dead_code)]
         query: String,
+        #[allow(dead_code)]
+        category: SearchCategory,
         results: Vec<SearchResultEntry>,
         selected: usize,
     },
@@ -302,6 +340,18 @@ fn draw_playing(
 fn perform_search(
     spotify: &AuthCodeSpotify,
     query: &str,
+    category: SearchCategory,
+) -> Result<Vec<SearchResultEntry>, String> {
+    match category {
+        SearchCategory::Track => perform_track_search(spotify, query),
+        SearchCategory::Album => perform_album_search(spotify, query),
+        SearchCategory::Playlist => perform_playlist_search(spotify, query),
+    }
+}
+
+fn perform_track_search(
+    spotify: &AuthCodeSpotify,
+    query: &str,
 ) -> Result<Vec<SearchResultEntry>, String> {
     let result = spotify
         .search(query, SearchType::Track, None, None, Some(5), None)
@@ -319,20 +369,82 @@ fn perform_search(
             let id = t.id?;
             Some(SearchResultEntry {
                 title: t.name,
-                artist: join_artist_names(&t.artists),
-                track_id: id,
+                subtitle: join_artist_names(&t.artists),
+                target: SearchPlayTarget::Track(id),
             })
         })
         .collect();
 
     if entries.is_empty() {
-        Err(format!("no results for \"{query}\""))
+        Err(format!("no tracks for \"{query}\""))
     } else {
         Ok(entries)
     }
 }
 
-fn draw_search_input_bar(frame: &mut Frame, query: &str) {
+fn perform_album_search(
+    spotify: &AuthCodeSpotify,
+    query: &str,
+) -> Result<Vec<SearchResultEntry>, String> {
+    let result = spotify
+        .search(query, SearchType::Album, None, None, Some(5), None)
+        .map_err(|e| format!("search failed: {e}"))?;
+
+    let albums = match result {
+        SearchResult::Albums(page) => page,
+        _ => return Err("unexpected search result type".to_string()),
+    };
+
+    let entries: Vec<SearchResultEntry> = albums
+        .items
+        .into_iter()
+        .filter_map(|a| {
+            let id = a.id?;
+            Some(SearchResultEntry {
+                title: a.name,
+                subtitle: join_artist_names(&a.artists),
+                target: SearchPlayTarget::Album(id),
+            })
+        })
+        .collect();
+
+    if entries.is_empty() {
+        Err(format!("no albums for \"{query}\""))
+    } else {
+        Ok(entries)
+    }
+}
+
+fn perform_playlist_search(
+    spotify: &AuthCodeSpotify,
+    query: &str,
+) -> Result<Vec<SearchResultEntry>, String> {
+    let playlists = crate::client::search_playlists(spotify, query, 5)
+        .map_err(|e| format!("search failed: {e}"))?;
+
+    let entries: Vec<SearchResultEntry> = playlists
+        .items
+        .into_iter()
+        .map(|p| SearchResultEntry {
+            title: p.name,
+            subtitle: format!(
+                "by {}",
+                p.owner
+                    .display_name
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
+            target: SearchPlayTarget::Playlist(p.id),
+        })
+        .collect();
+
+    if entries.is_empty() {
+        Err(format!("no playlists for \"{query}\""))
+    } else {
+        Ok(entries)
+    }
+}
+
+fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategory) {
     let content = content_rect(frame.area());
     let hints_area = Rect {
         y: content.y + content.height.saturating_sub(1),
@@ -342,21 +454,46 @@ fn draw_search_input_bar(frame: &mut Frame, query: &str) {
 
     let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(Color::DarkGray);
+    let dim_style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+    let active_style = Style::new().fg(ACCENT);
 
-    let left = vec![
-        Span::styled("/ ", key_style),
-        Span::styled(query.to_string(), Style::new().fg(Color::White)),
-        Span::styled("_", Style::new().fg(Color::DarkGray)),
+    let categories = [
+        SearchCategory::Track,
+        SearchCategory::Album,
+        SearchCategory::Playlist,
     ];
-    let left_width = 2 + query.len() + 1;
+    let mut left: Vec<Span> = Vec::new();
+    let mut left_width: usize = 0;
+    for (i, &cat) in categories.iter().enumerate() {
+        if i > 0 {
+            left.push(Span::styled("/", dim_style));
+            left_width += 1;
+        }
+        let label = cat.label();
+        if cat == category {
+            left.push(Span::styled(label, active_style));
+        } else {
+            left.push(Span::styled(label, dim_style));
+        }
+        left_width += label.len();
+    }
+    left.push(Span::styled(" ", Style::new()));
+    left_width += 1;
+
+    left.push(Span::styled("/ ", key_style));
+    left.push(Span::styled(query, Style::new().fg(Color::White)));
+    left.push(Span::styled("_", Style::new().fg(Color::DarkGray)));
+    left_width += 2 + query.len() + 1;
 
     let right_parts = vec![
+        Span::styled("Tab", key_style),
+        Span::styled(" type  ", desc_style),
         Span::styled("Enter", key_style),
         Span::styled(" search  ", desc_style),
         Span::styled("Esc", key_style),
         Span::styled(" cancel", desc_style),
     ];
-    let right_width: usize = "Enter search  Esc cancel".len();
+    let right_width: usize = right_parts.iter().map(|s| s.content.len()).sum();
 
     let padding = (hints_area.width as usize).saturating_sub(left_width + right_width);
     let mut spans = left;
@@ -418,7 +555,7 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
             Span::styled(num, title_style),
             Span::styled(&entry.title, title_style),
             Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)),
-            Span::styled(&entry.artist, artist_style),
+            Span::styled(&entry.subtitle, artist_style),
         ]);
         frame.render_widget(Paragraph::new(line), row);
     }
@@ -646,8 +783,8 @@ fn run_player_loop(
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Collect deferred actions to avoid borrow conflicts with mode
-                    let mut submit_search: Option<String> = None;
-                    let mut play_track_id: Option<TrackId<'static>> = None;
+                    let mut submit_search: Option<(String, SearchCategory)> = None;
+                    let mut play_target: Option<SearchPlayTarget> = None;
 
                     match &mut mode {
                         PlayerMode::Normal => match key.code {
@@ -655,6 +792,7 @@ fn run_player_loop(
                             KeyCode::Char('/') => {
                                 mode = PlayerMode::SearchInput {
                                     query: String::new(),
+                                    category: SearchCategory::Track,
                                 };
                                 needs_redraw = true;
                             }
@@ -790,7 +928,7 @@ fn run_player_loop(
                             }
                             _ => {}
                         },
-                        PlayerMode::SearchInput { query } => match key.code {
+                        PlayerMode::SearchInput { query, category } => match key.code {
                             KeyCode::Char(c) => {
                                 query.push(c);
                                 needs_redraw = true;
@@ -799,9 +937,13 @@ fn run_player_loop(
                                 query.pop();
                                 needs_redraw = true;
                             }
+                            KeyCode::Tab | KeyCode::BackTab => {
+                                *category = category.next();
+                                needs_redraw = true;
+                            }
                             KeyCode::Enter => {
                                 if !query.is_empty() {
-                                    submit_search = Some(query.clone());
+                                    submit_search = Some((query.clone(), *category));
                                 }
                             }
                             KeyCode::Esc => {
@@ -829,12 +971,12 @@ fn run_player_loop(
                                 needs_redraw = true;
                             }
                             KeyCode::Enter => {
-                                play_track_id = Some(results[*selected].track_id.clone());
+                                play_target = Some(results[*selected].target.clone());
                             }
                             KeyCode::Char(c @ '1'..='9') => {
                                 let idx = (c as usize) - ('1' as usize);
                                 if idx < results.len() {
-                                    play_track_id = Some(results[idx].track_id.clone());
+                                    play_target = Some(results[idx].target.clone());
                                 }
                             }
                             KeyCode::Esc => {
@@ -846,23 +988,44 @@ fn run_player_loop(
                     }
 
                     // Handle deferred search submission (avoids borrow conflict)
-                    if let Some(q) = submit_search {
+                    if let Some((q, cat)) = submit_search {
                         let sp = spotify.clone();
-                        let query = q.clone();
                         let (tx, rx) = mpsc::channel();
                         search_rx = Some(rx);
+                        mode = PlayerMode::SearchLoading {
+                            query: q.clone(),
+                            category: cat,
+                        };
                         std::thread::spawn(move || {
-                            let result = perform_search(&sp, &query);
+                            let result = perform_search(&sp, &q, cat);
                             let _ = tx.send(result);
                         });
-                        mode = PlayerMode::SearchLoading { query: q };
                         needs_redraw = true;
                     }
 
-                    // Handle deferred track play (avoids borrow conflict)
-                    if let Some(track_id) = play_track_id {
-                        let playable = PlayableId::Track(track_id);
-                        match spotify.start_uris_playback([playable], None, None, None) {
+                    // Handle deferred play action (avoids borrow conflict)
+                    if let Some(target) = play_target {
+                        let result = match target {
+                            SearchPlayTarget::Track(id) => spotify.start_uris_playback(
+                                [PlayableId::Track(id)],
+                                None,
+                                None,
+                                None,
+                            ),
+                            SearchPlayTarget::Album(id) => spotify.start_context_playback(
+                                PlayContextId::Album(id),
+                                None,
+                                None,
+                                None,
+                            ),
+                            SearchPlayTarget::Playlist(id) => spotify.start_context_playback(
+                                PlayContextId::Playlist(id),
+                                None,
+                                None,
+                                None,
+                            ),
+                        };
+                        match result {
                             Err(e) => {
                                 status_message = Some((
                                     format!("{}", api_error(e, "start playback")),
@@ -968,9 +1131,10 @@ fn run_player_loop(
             match rx.try_recv() {
                 Ok(Ok(results)) => {
                     search_rx = None;
-                    if let PlayerMode::SearchLoading { query } = &mode {
+                    if let PlayerMode::SearchLoading { query, category } = &mode {
                         mode = PlayerMode::SearchResults {
                             query: query.clone(),
+                            category: *category,
                             results,
                             selected: 0,
                         };
@@ -980,9 +1144,10 @@ fn run_player_loop(
                 Ok(Err(msg)) => {
                     search_rx = None;
                     status_message = Some((msg, Instant::now()));
-                    if let PlayerMode::SearchLoading { query } = &mode {
+                    if let PlayerMode::SearchLoading { query, category } = &mode {
                         mode = PlayerMode::SearchInput {
                             query: query.clone(),
+                            category: *category,
                         };
                     }
                     needs_redraw = true;
@@ -1052,8 +1217,8 @@ fn run_player_loop(
                             status_message.as_ref().map(|(msg, _)| msg.as_str()),
                         );
                         match &mode {
-                            PlayerMode::SearchInput { query } => {
-                                draw_search_input_bar(frame, query);
+                            PlayerMode::SearchInput { query, category } => {
+                                draw_search_input_bar(frame, query, *category);
                             }
                             PlayerMode::SearchLoading { .. } => {
                                 draw_search_loading_overlay(frame);
@@ -1148,5 +1313,12 @@ mod tests {
         let area = Rect::new(0, 0, 80, 1);
         let line = build_progress_line(60_000, 240, true, Some(50), area);
         assert_eq!(line.spans.len(), 9);
+    }
+
+    #[test]
+    fn search_category_cycles_forward() {
+        assert_eq!(SearchCategory::Track.next(), SearchCategory::Album);
+        assert_eq!(SearchCategory::Album.next(), SearchCategory::Playlist);
+        assert_eq!(SearchCategory::Playlist.next(), SearchCategory::Track);
     }
 }
