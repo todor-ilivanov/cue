@@ -481,10 +481,7 @@ fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategor
     left_width += 1;
 
     left.push(Span::styled("/ ", key_style));
-    left.push(Span::styled(
-        query.to_string(),
-        Style::new().fg(Color::White),
-    ));
+    left.push(Span::styled(query, Style::new().fg(Color::White)));
     left.push(Span::styled("_", Style::new().fg(Color::DarkGray)));
     left_width += 2 + query.len() + 1;
 
@@ -496,7 +493,7 @@ fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategor
         Span::styled("Esc", key_style),
         Span::styled(" cancel", desc_style),
     ];
-    let right_width: usize = "Tab type  Enter search  Esc cancel".len();
+    let right_width: usize = right_parts.iter().map(|s| s.content.len()).sum();
 
     let padding = (hints_area.width as usize).saturating_sub(left_width + right_width);
     let mut spans = left;
@@ -993,35 +990,40 @@ fn run_player_loop(
                     // Handle deferred search submission (avoids borrow conflict)
                     if let Some((q, cat)) = submit_search {
                         let sp = spotify.clone();
-                        let query = q.clone();
                         let (tx, rx) = mpsc::channel();
                         search_rx = Some(rx);
-                        std::thread::spawn(move || {
-                            let result = perform_search(&sp, &query, cat);
-                            let _ = tx.send(result);
-                        });
                         mode = PlayerMode::SearchLoading {
-                            query: q,
+                            query: q.clone(),
                             category: cat,
                         };
+                        std::thread::spawn(move || {
+                            let result = perform_search(&sp, &q, cat);
+                            let _ = tx.send(result);
+                        });
                         needs_redraw = true;
                     }
 
                     // Handle deferred play action (avoids borrow conflict)
                     if let Some(target) = play_target {
                         let result = match target {
-                            SearchPlayTarget::Track(id) => {
-                                let playable = PlayableId::Track(id);
-                                spotify.start_uris_playback([playable], None, None, None)
-                            }
-                            SearchPlayTarget::Album(id) => {
-                                let context = PlayContextId::Album(id);
-                                spotify.start_context_playback(context, None, None, None)
-                            }
-                            SearchPlayTarget::Playlist(id) => {
-                                let context = PlayContextId::Playlist(id);
-                                spotify.start_context_playback(context, None, None, None)
-                            }
+                            SearchPlayTarget::Track(id) => spotify.start_uris_playback(
+                                [PlayableId::Track(id)],
+                                None,
+                                None,
+                                None,
+                            ),
+                            SearchPlayTarget::Album(id) => spotify.start_context_playback(
+                                PlayContextId::Album(id),
+                                None,
+                                None,
+                                None,
+                            ),
+                            SearchPlayTarget::Playlist(id) => spotify.start_context_playback(
+                                PlayContextId::Playlist(id),
+                                None,
+                                None,
+                                None,
+                            ),
                         };
                         match result {
                             Err(e) => {
