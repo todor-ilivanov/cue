@@ -650,12 +650,27 @@ fn build_hints_playing(width: u16) -> Line<'static> {
     let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(Color::DarkGray);
 
-    if width < 60 {
+    if width < 45 {
         Line::from(vec![
             Span::styled("spc", key_style),
             Span::styled(" \u{23ef}  ", desc_style),
             Span::styled("n/p", key_style),
             Span::styled(" \u{23ed}/\u{23ee}  ", desc_style),
+            Span::styled("?", key_style),
+            Span::styled(" help  ", desc_style),
+            Span::styled("esc", key_style),
+            Span::styled(" quit", desc_style),
+        ])
+    } else if width < 75 {
+        Line::from(vec![
+            Span::styled("spc", key_style),
+            Span::styled(" play  ", desc_style),
+            Span::styled("n/p", key_style),
+            Span::styled(" next/prev  ", desc_style),
+            Span::styled("\u{2190}/\u{2192}", key_style),
+            Span::styled(" seek  ", desc_style),
+            Span::styled("\u{2191}/\u{2193}", key_style),
+            Span::styled(" vol  ", desc_style),
             Span::styled("?", key_style),
             Span::styled(" help  ", desc_style),
             Span::styled("esc", key_style),
@@ -699,7 +714,7 @@ fn draw_help_overlay(frame: &mut Frame) {
         ("         esc", "Quit"),
     ];
 
-    let box_width: u16 = 44;
+    let box_width: u16 = 48;
     let box_height: u16 = (bindings.len() as u16) + 4;
 
     let x = area.x + area.width.saturating_sub(box_width) / 2;
