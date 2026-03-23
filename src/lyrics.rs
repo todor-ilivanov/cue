@@ -393,14 +393,9 @@ fn draw_plain(frame: &mut Frame, area: Rect, text: &str) {
     frame.render_widget(paragraph, text_area);
 }
 
-/// Compute the first (possibly negative) line index that should appear at the
-/// top of the lyrics viewport.  `center` is the line that should be visually
-/// centred, `window` is the viewport height in rows, and `manual` indicates
-/// whether the user is in manual-scroll mode.
-///
-/// In auto-scroll mode the start is clamped so we never show blank lines above
-/// the first lyric.  In manual-scroll mode the center line is always pinned at
-/// the visual middle so that every j/k press shifts the viewport by one line.
+/// Auto-scroll clamps so we never show blank lines above the first lyric.
+/// Manual scroll always pins the center at the visual middle so every j/k
+/// press shifts by exactly one line.
 fn viewport_start(center: usize, window: usize, manual: bool) -> isize {
     let anchor = window / 2;
     if manual {
@@ -429,11 +424,12 @@ fn draw_synced(
     let center = scroll_center.or(active).unwrap_or(0);
     let virtual_start = viewport_start(center, window, scroll_center.is_some());
 
+    let num_lines = synced.lines.len() as isize;
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(window);
 
     for row in 0..window {
         let line_idx_signed = virtual_start + row as isize;
-        if line_idx_signed < 0 || line_idx_signed >= synced.lines.len() as isize {
+        if line_idx_signed < 0 || line_idx_signed >= num_lines {
             rendered_lines.push(Line::from(""));
             continue;
         }
@@ -640,14 +636,8 @@ mod tests {
         assert_eq!(synced.lines[0].timestamp_ms, 0);
     }
 
-    // -----------------------------------------------------------------------
-    // viewport_start tests
-    // -----------------------------------------------------------------------
-
     #[test]
     fn auto_scroll_clamps_at_top() {
-        // Auto-scroll with center near the top should not go negative.
-        // window=40, anchor=20, center=3 → start should be 0, not -17.
         assert_eq!(viewport_start(3, 40, false), 0);
         assert_eq!(viewport_start(0, 40, false), 0);
         assert_eq!(viewport_start(19, 40, false), 0);
@@ -655,7 +645,6 @@ mod tests {
 
     #[test]
     fn auto_scroll_scrolls_past_anchor() {
-        // Once center passes the anchor row, auto-scroll shifts the viewport.
         assert_eq!(viewport_start(20, 40, false), 0);
         assert_eq!(viewport_start(21, 40, false), 1);
         assert_eq!(viewport_start(30, 40, false), 10);
@@ -663,15 +652,12 @@ mod tests {
 
     #[test]
     fn manual_scroll_always_centers() {
-        // Manual scroll must always place center at the visual middle,
-        // even when the center line is near the top of the lyrics.
         assert_eq!(viewport_start(3, 40, true), -17);
         assert_eq!(viewport_start(0, 40, true), -20);
     }
 
     #[test]
     fn manual_scroll_shifts_by_one() {
-        // Each increment of center must shift viewport_start by exactly 1.
         let a = viewport_start(5, 40, true);
         let b = viewport_start(6, 40, true);
         assert_eq!(b - a, 1);
@@ -683,7 +669,6 @@ mod tests {
 
     #[test]
     fn manual_and_auto_agree_past_anchor() {
-        // Once center is well past the anchor, both modes produce the same start.
         assert_eq!(
             viewport_start(30, 40, true),
             viewport_start(30, 40, false)
@@ -692,9 +677,7 @@ mod tests {
 
     #[test]
     fn small_window_manual_scroll() {
-        // Small screen (window=10, anchor=5): manual scroll at center=2.
         assert_eq!(viewport_start(2, 10, true), -3);
-        // Each j press still shifts by 1.
         assert_eq!(viewport_start(3, 10, true), -2);
     }
 }
