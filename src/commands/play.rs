@@ -109,7 +109,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
                 ui::PickCandidate {
                     name: a.name.clone(),
                     label: format!("{} — {}", a.name, join_artist_names(&a.artists)),
-                    popularity: Some(10u32.saturating_sub(i as u32) * 10),
+                    popularity: Some(super::positional_popularity(i)),
                 },
             ))
         })
@@ -147,7 +147,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
             ui::PickCandidate {
                 name: p.name.clone(),
                 label: format!("{} — by {owner}", p.name),
-                popularity: Some(10u32.saturating_sub(i as u32) * 10),
+                popularity: Some(super::positional_popularity(i)),
             }
         })
         .collect();

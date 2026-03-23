@@ -34,6 +34,10 @@ pub fn release_year(date: Option<&str>) -> Option<&str> {
     date.and_then(|d| d.get(..4))
 }
 
+pub fn positional_popularity(index: usize) -> u32 {
+    10u32.saturating_sub(index as u32) * 10
+}
+
 /// Map common Spotify API errors to user-friendly messages.
 pub fn api_error(err: ClientError, action: &str) -> anyhow::Error {
     if let ClientError::Http(ref e) = err {

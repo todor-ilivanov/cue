@@ -124,8 +124,6 @@ fn most_popular(candidates: &[PickCandidate], indices: &[usize]) -> usize {
         .unwrap_or(&0)
 }
 
-/// Score, sort, filter, and truncate candidates by fuzzy relevance + popularity.
-/// Returns (original_index, score) pairs sorted descending, capped at `max_results`.
 pub fn rank_candidates(
     query: &str,
     candidates: &[PickCandidate],
@@ -146,9 +144,8 @@ pub fn rank_candidates(
 
     scored.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // Filter out results scoring below 40% of the best match
     if let Some(&(_, best)) = scored.first() {
-        let threshold = best * 2 / 5;
+        let threshold = best.max(0) * 2 / 5;
         let keep = scored
             .iter()
             .take_while(|(_, s)| *s >= threshold)
