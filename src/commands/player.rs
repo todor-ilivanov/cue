@@ -686,30 +686,27 @@ fn draw_help_overlay(frame: &mut Frame) {
     let dim_style = Style::new().fg(Color::DarkGray);
 
     let bindings: &[(&str, &str)] = &[
-        ("space", "Pause / resume"),
-        ("n / p", "Next / previous track"),
-        ("\u{2190} / \u{2192}", "Seek backward / forward 5s"),
-        ("\u{2191} / \u{2193}", "Volume up / down"),
-        ("l", "Toggle lyrics"),
-        ("j / k", "Scroll lyrics"),
-        ("s", "Sync lyrics to playback"),
-        ("q", "Toggle queue"),
-        ("/", "Search tracks, albums, playlists"),
-        ("r", "Refresh now playing"),
-        ("esc", "Quit"),
+        ("       space", "Pause / resume"),
+        ("       n / p", "Next / previous track"),
+        ("   \u{2190} / \u{2192}", "Seek backward / forward 5s"),
+        ("   \u{2191} / \u{2193}", "Volume up / down"),
+        ("           l", "Toggle lyrics"),
+        ("       j / k", "Scroll lyrics"),
+        ("           s", "Sync lyrics to playback"),
+        ("           q", "Toggle queue"),
+        ("           /", "Search tracks, albums, playlists"),
+        ("           r", "Refresh now playing"),
+        ("         esc", "Quit"),
     ];
 
-    let col_key_width: u16 = 12;
     let box_width: u16 = 44;
-    let box_height: u16 = (bindings.len() as u16) + 4; // title + blank + bindings + blank
+    let box_height: u16 = (bindings.len() as u16) + 4;
 
     let x = area.x + area.width.saturating_sub(box_width) / 2;
     let y = area.y + area.height.saturating_sub(box_height) / 2;
     let overlay = Rect::new(x, y, box_width.min(area.width), box_height.min(area.height));
 
-    // Clear the overlay area
-    let clear = ratatui::widgets::Clear;
-    frame.render_widget(clear, overlay);
+    frame.render_widget(ratatui::widgets::Clear, overlay);
 
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
@@ -721,40 +718,36 @@ fn draw_help_overlay(frame: &mut Frame) {
     let inner = block.inner(overlay);
     frame.render_widget(block, overlay);
 
-    let rows = Layout::vertical(
-        std::iter::once(Constraint::Length(1))
-            .chain(bindings.iter().map(|_| Constraint::Length(1)))
-            .collect::<Vec<_>>(),
-    )
-    .split(inner);
-
-    // blank first row (spacing)
     for (i, &(key, desc)) in bindings.iter().enumerate() {
+        let row = Rect {
+            y: inner.y + 1 + i as u16,
+            height: 1,
+            ..inner
+        };
+        if row.y >= inner.y + inner.height {
+            break;
+        }
         let line = Line::from(vec![
-            Span::styled(
-                format!("{:>width$}", key, width = col_key_width as usize),
-                key_style,
-            ),
+            Span::styled(key, key_style),
             Span::styled("  ", Style::new()),
             Span::styled(desc, desc_style),
         ]);
-        frame.render_widget(Paragraph::new(line), rows[i + 1]);
+        frame.render_widget(Paragraph::new(line), row);
     }
 
-    // Dismiss hint at bottom of overlay
-    let dismiss = Line::from(vec![
-        Span::styled("Press ", dim_style),
-        Span::styled("?", key_style),
-        Span::styled(" or ", dim_style),
-        Span::styled("esc", key_style),
-        Span::styled(" to close", dim_style),
-    ]);
     let dismiss_area = Rect {
         y: overlay.y + overlay.height,
         height: 1,
         ..overlay
     };
     if dismiss_area.y < area.y + area.height {
+        let dismiss = Line::from(vec![
+            Span::styled("Press ", dim_style),
+            Span::styled("?", key_style),
+            Span::styled(" or ", dim_style),
+            Span::styled("esc", key_style),
+            Span::styled(" to close", dim_style),
+        ]);
         frame.render_widget(
             Paragraph::new(dismiss).alignment(ratatui::layout::Alignment::Center),
             dismiss_area,
