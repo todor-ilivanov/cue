@@ -393,6 +393,18 @@ fn draw_plain(frame: &mut Frame, area: Rect, text: &str) {
     frame.render_widget(paragraph, text_area);
 }
 
+/// Auto-scroll clamps so we never show blank lines above the first lyric.
+/// Manual scroll always pins the center at the visual middle so every j/k
+/// press shifts by exactly one line.
+fn viewport_start(center: usize, window: usize, manual: bool) -> isize {
+    let anchor = window / 2;
+    if manual {
+        center as isize - anchor as isize
+    } else {
+        center.saturating_sub(anchor) as isize
+    }
+}
+
 fn draw_synced(
     frame: &mut Frame,
     area: Rect,
@@ -410,17 +422,18 @@ fn draw_synced(
     let window = height;
 
     let center = scroll_center.or(active).unwrap_or(0);
-    let anchor_row = window / 2;
-    let start_idx = center.saturating_sub(anchor_row);
+    let virtual_start = viewport_start(center, window, scroll_center.is_some());
 
+    let num_lines = synced.lines.len() as isize;
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(window);
 
     for row in 0..window {
-        let line_idx = start_idx + row;
-        if line_idx >= synced.lines.len() {
+        let line_idx_signed = virtual_start + row as isize;
+        if line_idx_signed < 0 || line_idx_signed >= num_lines {
             rendered_lines.push(Line::from(""));
             continue;
         }
+        let line_idx = line_idx_signed as usize;
 
         let lyric = &synced.lines[line_idx];
         let text = if lyric.text.is_empty() {
@@ -448,11 +461,12 @@ fn draw_synced(
     // Distance indicator when in manual scroll mode
     if scroll_center.is_some() {
         if let Some(ai) = active {
-            let end_idx = start_idx + window;
-            let (arrow, dist, at_top) = if ai < start_idx {
-                ("\u{25b2}", start_idx - ai, true)
-            } else if ai >= end_idx {
-                ("\u{25bc}", ai - end_idx + 1, false)
+            let visible_start = virtual_start.max(0) as usize;
+            let visible_end = (virtual_start + window as isize).max(0) as usize;
+            let (arrow, dist, at_top) = if ai < visible_start {
+                ("\u{25b2}", visible_start - ai, true)
+            } else if ai >= visible_end {
+                ("\u{25bc}", ai - visible_end + 1, false)
             } else {
                 return;
             };
@@ -620,5 +634,50 @@ mod tests {
         let input = "[offset:99999]\n[00:01.00]Line";
         let synced = parse_lrc(input);
         assert_eq!(synced.lines[0].timestamp_ms, 0);
+    }
+
+    #[test]
+    fn auto_scroll_clamps_at_top() {
+        assert_eq!(viewport_start(3, 40, false), 0);
+        assert_eq!(viewport_start(0, 40, false), 0);
+        assert_eq!(viewport_start(19, 40, false), 0);
+    }
+
+    #[test]
+    fn auto_scroll_scrolls_past_anchor() {
+        assert_eq!(viewport_start(20, 40, false), 0);
+        assert_eq!(viewport_start(21, 40, false), 1);
+        assert_eq!(viewport_start(30, 40, false), 10);
+    }
+
+    #[test]
+    fn manual_scroll_always_centers() {
+        assert_eq!(viewport_start(3, 40, true), -17);
+        assert_eq!(viewport_start(0, 40, true), -20);
+    }
+
+    #[test]
+    fn manual_scroll_shifts_by_one() {
+        let a = viewport_start(5, 40, true);
+        let b = viewport_start(6, 40, true);
+        assert_eq!(b - a, 1);
+
+        let c = viewport_start(25, 40, true);
+        let d = viewport_start(26, 40, true);
+        assert_eq!(d - c, 1);
+    }
+
+    #[test]
+    fn manual_and_auto_agree_past_anchor() {
+        assert_eq!(
+            viewport_start(30, 40, true),
+            viewport_start(30, 40, false)
+        );
+    }
+
+    #[test]
+    fn small_window_manual_scroll() {
+        assert_eq!(viewport_start(2, 10, true), -3);
+        assert_eq!(viewport_start(3, 10, true), -2);
     }
 }
