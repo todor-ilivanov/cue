@@ -669,10 +669,7 @@ mod tests {
 
     #[test]
     fn manual_and_auto_agree_past_anchor() {
-        assert_eq!(
-            viewport_start(30, 40, true),
-            viewport_start(30, 40, false)
-        );
+        assert_eq!(viewport_start(30, 40, true), viewport_start(30, 40, false));
     }
 
     #[test]
