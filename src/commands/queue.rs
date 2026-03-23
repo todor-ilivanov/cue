@@ -14,7 +14,7 @@ pub fn queue_add(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
                 rspotify::model::SearchType::Track,
                 None,
                 None,
-                Some(5),
+                Some(10),
                 None,
             )
             .context("failed to search for track")

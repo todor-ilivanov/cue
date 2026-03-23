@@ -124,7 +124,11 @@ fn most_popular(candidates: &[PickCandidate], indices: &[usize]) -> usize {
         .unwrap_or(&0)
 }
 
-fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Result<usize> {
+pub fn rank_candidates(
+    query: &str,
+    candidates: &[PickCandidate],
+    max_results: usize,
+) -> Vec<(usize, i64)> {
     let matcher = SkimMatcherV2::default();
     let mut scored: Vec<(usize, i64)> = candidates
         .iter()
@@ -133,19 +137,36 @@ fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Resul
             let name_score = matcher.fuzzy_match(&c.name, query).unwrap_or(0);
             let label_score = matcher.fuzzy_match(&c.label, query).unwrap_or(0);
             let fuzzy_score = name_score.max(label_score);
-            let pop_boost = c.popularity.unwrap_or(0) as i64 * 3;
+            let pop_boost = c.popularity.unwrap_or(0) as i64 * 10;
             (i, fuzzy_score + pop_boost)
         })
         .collect();
 
     scored.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let sorted_labels: Vec<String> = scored
+    if let Some(&(_, best)) = scored.first() {
+        let threshold = best.max(0) * 2 / 5;
+        let keep = scored
+            .iter()
+            .take_while(|(_, s)| *s >= threshold)
+            .count()
+            .max(1);
+        scored.truncate(keep);
+    }
+
+    scored.truncate(max_results);
+    scored
+}
+
+fn show_picker(query: &str, candidates: &[PickCandidate], prompt: &str) -> Result<usize> {
+    let ranked = rank_candidates(query, candidates, 5);
+
+    let sorted_labels: Vec<String> = ranked
         .iter()
         .map(|&(i, _)| candidates[i].label.clone())
         .collect();
     match select(prompt, &sorted_labels)? {
-        Some(idx) => Ok(scored[idx].0),
+        Some(idx) => Ok(ranked[idx].0),
         None => bail!("cancelled"),
     }
 }
@@ -313,5 +334,78 @@ mod tests {
             },
         ];
         assert_eq!(pick_result("creep", candidates, "Pick", false).unwrap(), 0);
+    }
+
+    #[test]
+    fn rank_popularity_dominates_similar_fuzzy() {
+        // "Led Zeppelin" (pop 90) should rank above "Led Zepagain" (pop 15)
+        let candidates = vec![
+            PickCandidate {
+                name: "Led Zepagain".to_string(),
+                label: "Led Zepagain — Led Zepagain".to_string(),
+                popularity: Some(15),
+            },
+            PickCandidate {
+                name: "Led Zeppelin".to_string(),
+                label: "Led Zeppelin — Led Zeppelin".to_string(),
+                popularity: Some(90),
+            },
+        ];
+        let ranked = rank_candidates("led zeppelin", &candidates, 5);
+        assert_eq!(ranked[0].0, 1, "Led Zeppelin should rank first");
+    }
+
+    #[test]
+    fn rank_fuzzy_relevance_can_still_win() {
+        // A strong fuzzy match should beat a non-match even with somewhat higher popularity
+        let candidates = vec![
+            PickCandidate {
+                name: "Bohemian Rhapsody".to_string(),
+                label: "Bohemian Rhapsody — Queen".to_string(),
+                popularity: Some(70),
+            },
+            PickCandidate {
+                name: "Completely Unrelated Song".to_string(),
+                label: "Completely Unrelated Song — Famous Artist".to_string(),
+                popularity: Some(75),
+            },
+        ];
+        let ranked = rank_candidates("bohemian rhapsody", &candidates, 5);
+        assert_eq!(
+            ranked[0].0, 0,
+            "Strong fuzzy match should outrank weak match with similar popularity"
+        );
+    }
+
+    #[test]
+    fn rank_filters_low_scoring_tail() {
+        let candidates = vec![
+            PickCandidate {
+                name: "Stairway to Heaven".to_string(),
+                label: "Stairway to Heaven — Led Zeppelin".to_string(),
+                popularity: Some(85),
+            },
+            PickCandidate {
+                name: "ZZZZZ".to_string(),
+                label: "ZZZZZ — Nobody".to_string(),
+                popularity: Some(1),
+            },
+        ];
+        let ranked = rank_candidates("stairway to heaven", &candidates, 5);
+        // The irrelevant result should be filtered out (score well below 40% of best)
+        assert_eq!(ranked.len(), 1, "Irrelevant result should be filtered");
+    }
+
+    #[test]
+    fn rank_truncates_to_max_results() {
+        let candidates: Vec<PickCandidate> = (0..10)
+            .map(|i| PickCandidate {
+                name: format!("Song {i}"),
+                label: format!("Song {i} — Artist"),
+                popularity: Some(50),
+            })
+            .collect();
+        let ranked = rank_candidates("song", &candidates, 5);
+        assert!(ranked.len() <= 5, "Should return at most 5 results");
     }
 }

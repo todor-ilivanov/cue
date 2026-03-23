@@ -75,7 +75,7 @@ fn search_tracks(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
                 rspotify::model::SearchType::Track,
                 None,
                 None,
-                Some(5),
+                Some(10),
                 None,
             )
             .context("failed to search for tracks")
@@ -90,7 +90,20 @@ fn search_tracks(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         bail!("no results for \"{query}\"");
     }
 
-    for (i, track) in tracks.items.iter().enumerate() {
+    let candidates: Vec<ui::PickCandidate> = tracks
+        .items
+        .iter()
+        .map(|t| ui::PickCandidate {
+            name: t.name.clone(),
+            label: format!("{} — {}", t.name, join_artist_names(&t.artists)),
+            popularity: Some(t.popularity),
+        })
+        .collect();
+
+    let ranked = ui::rank_candidates(query, &candidates, 5);
+
+    for (display_idx, &(orig_idx, _)) in ranked.iter().enumerate() {
+        let track = &tracks.items[orig_idx];
         let artists = join_artist_names(&track.artists);
 
         let album_info = {
@@ -106,12 +119,17 @@ fn search_tracks(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         if ui::is_interactive() {
             println!(
                 "  {}. {}{}",
-                i + 1,
+                display_idx + 1,
                 ui::styled_song(&track.name, &artists),
                 console::style(&album_info).dim()
             );
         } else {
-            println!("  {}. {} — {}{album_info}", i + 1, track.name, artists);
+            println!(
+                "  {}. {} — {}{album_info}",
+                display_idx + 1,
+                track.name,
+                artists
+            );
         }
     }
 
@@ -126,7 +144,7 @@ fn search_albums(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
                 rspotify::model::SearchType::Album,
                 None,
                 None,
-                Some(5),
+                Some(10),
                 None,
             )
             .context("failed to search for albums")
@@ -141,7 +159,21 @@ fn search_albums(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         bail!("no results for \"{query}\"");
     }
 
-    for (i, album) in albums.items.iter().enumerate() {
+    let candidates: Vec<ui::PickCandidate> = albums
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, a)| ui::PickCandidate {
+            name: a.name.clone(),
+            label: format!("{} — {}", a.name, join_artist_names(&a.artists)),
+            popularity: Some(super::positional_popularity(i)),
+        })
+        .collect();
+
+    let ranked = ui::rank_candidates(query, &candidates, 5);
+
+    for (display_idx, &(orig_idx, _)) in ranked.iter().enumerate() {
+        let album = &albums.items[orig_idx];
         let artists = join_artist_names(&album.artists);
 
         let year_suffix = match release_year(album.release_date.as_deref()) {
@@ -152,12 +184,17 @@ fn search_albums(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
         if ui::is_interactive() {
             println!(
                 "  {}. {}{}",
-                i + 1,
+                display_idx + 1,
                 ui::styled_song(&album.name, &artists),
                 console::style(&year_suffix).dim()
             );
         } else {
-            println!("  {}. {} — {}{year_suffix}", i + 1, album.name, artists);
+            println!(
+                "  {}. {} — {}{year_suffix}",
+                display_idx + 1,
+                album.name,
+                artists
+            );
         }
     }
 

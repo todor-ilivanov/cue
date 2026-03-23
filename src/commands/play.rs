@@ -33,7 +33,7 @@ fn play_track(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
                 rspotify::model::SearchType::Track,
                 None,
                 None,
-                Some(5),
+                Some(10),
                 None,
             )
             .context("failed to search for track")
@@ -87,7 +87,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
                 rspotify::model::SearchType::Album,
                 None,
                 None,
-                Some(5),
+                Some(10),
                 None,
             )
             .context("failed to search for album")
@@ -109,7 +109,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
                 ui::PickCandidate {
                     name: a.name.clone(),
                     label: format!("{} — {}", a.name, join_artist_names(&a.artists)),
-                    popularity: Some(5u32.saturating_sub(i as u32) * 20),
+                    popularity: Some(super::positional_popularity(i)),
                 },
             ))
         })
@@ -135,7 +135,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
 
 fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Result<()> {
     let playlists = ui::with_spinner("Searching...", || {
-        crate::client::search_playlists(spotify, query, 5)
+        crate::client::search_playlists(spotify, query, 10)
     })?;
 
     let candidates: Vec<ui::PickCandidate> = playlists
@@ -147,7 +147,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
             ui::PickCandidate {
                 name: p.name.clone(),
                 label: format!("{} — by {owner}", p.name),
-                popularity: Some(5u32.saturating_sub(i as u32) * 20),
+                popularity: Some(super::positional_popularity(i)),
             }
         })
         .collect();
