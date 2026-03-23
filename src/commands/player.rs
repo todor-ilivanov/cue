@@ -650,25 +650,14 @@ fn build_hints_playing(width: u16) -> Line<'static> {
     let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(Color::DarkGray);
 
-    if width < 85 {
-        // Compact hints for narrow terminals
+    if width < 60 {
         Line::from(vec![
             Span::styled("spc", key_style),
             Span::styled(" \u{23ef}  ", desc_style),
             Span::styled("n/p", key_style),
             Span::styled(" \u{23ed}/\u{23ee}  ", desc_style),
-            Span::styled("\u{2190}/\u{2192}", key_style),
-            Span::styled(" seek  ", desc_style),
-            Span::styled("\u{2191}/\u{2193}", key_style),
-            Span::styled(" vol  ", desc_style),
-            Span::styled("j/k", key_style),
-            Span::styled(" scroll  ", desc_style),
-            Span::styled("s", key_style),
-            Span::styled(" sync  ", desc_style),
-            Span::styled("q", key_style),
-            Span::styled(" queue  ", desc_style),
-            Span::styled("/", key_style),
-            Span::styled(" srch  ", desc_style),
+            Span::styled("?", key_style),
+            Span::styled(" help  ", desc_style),
             Span::styled("esc", key_style),
             Span::styled(" quit", desc_style),
         ])
@@ -678,21 +667,91 @@ fn build_hints_playing(width: u16) -> Line<'static> {
             Span::styled(" pause/resume  ", desc_style),
             Span::styled("n/p", key_style),
             Span::styled(" next/prev  ", desc_style),
-            Span::styled("</>", key_style),
+            Span::styled("\u{2190}/\u{2192}", key_style),
             Span::styled(" seek  ", desc_style),
             Span::styled("\u{2191}/\u{2193}", key_style),
             Span::styled(" volume  ", desc_style),
-            Span::styled("j/k", key_style),
-            Span::styled(" scroll lyrics  ", desc_style),
-            Span::styled("s", key_style),
-            Span::styled(" sync  ", desc_style),
-            Span::styled("q", key_style),
-            Span::styled(" queue  ", desc_style),
-            Span::styled("/", key_style),
-            Span::styled(" search  ", desc_style),
+            Span::styled("?", key_style),
+            Span::styled(" help  ", desc_style),
             Span::styled("esc", key_style),
             Span::styled(" quit", desc_style),
         ])
+    }
+}
+
+fn draw_help_overlay(frame: &mut Frame) {
+    let area = frame.area();
+    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::Gray);
+    let dim_style = Style::new().fg(Color::DarkGray);
+
+    let bindings: &[(&str, &str)] = &[
+        ("       space", "Pause / resume"),
+        ("       n / p", "Next / previous track"),
+        ("   \u{2190} / \u{2192}", "Seek backward / forward 5s"),
+        ("   \u{2191} / \u{2193}", "Volume up / down"),
+        ("           l", "Toggle lyrics"),
+        ("       j / k", "Scroll lyrics"),
+        ("           s", "Sync lyrics to playback"),
+        ("           q", "Toggle queue"),
+        ("           /", "Search tracks, albums, playlists"),
+        ("           r", "Refresh now playing"),
+        ("         esc", "Quit"),
+    ];
+
+    let box_width: u16 = 44;
+    let box_height: u16 = (bindings.len() as u16) + 4;
+
+    let x = area.x + area.width.saturating_sub(box_width) / 2;
+    let y = area.y + area.height.saturating_sub(box_height) / 2;
+    let overlay = Rect::new(x, y, box_width.min(area.width), box_height.min(area.height));
+
+    frame.render_widget(ratatui::widgets::Clear, overlay);
+
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::new().fg(SEPARATOR_COLOR))
+        .title(Span::styled(
+            " Keyboard shortcuts ",
+            Style::new().fg(ACCENT),
+        ));
+    let inner = block.inner(overlay);
+    frame.render_widget(block, overlay);
+
+    for (i, &(key, desc)) in bindings.iter().enumerate() {
+        let row = Rect {
+            y: inner.y + 1 + i as u16,
+            height: 1,
+            ..inner
+        };
+        if row.y >= inner.y + inner.height {
+            break;
+        }
+        let line = Line::from(vec![
+            Span::styled(key, key_style),
+            Span::styled("  ", Style::new()),
+            Span::styled(desc, desc_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), row);
+    }
+
+    let dismiss_area = Rect {
+        y: overlay.y + overlay.height,
+        height: 1,
+        ..overlay
+    };
+    if dismiss_area.y < area.y + area.height {
+        let dismiss = Line::from(vec![
+            Span::styled("Press ", dim_style),
+            Span::styled("?", key_style),
+            Span::styled(" or ", dim_style),
+            Span::styled("esc", key_style),
+            Span::styled(" to close", dim_style),
+        ]);
+        frame.render_widget(
+            Paragraph::new(dismiss).alignment(ratatui::layout::Alignment::Center),
+            dismiss_area,
+        );
     }
 }
 
@@ -758,6 +817,7 @@ fn run_player_loop(
 
     // Queue state
     let mut show_queue = false;
+    let mut show_help = false;
     let mut queue_context: Option<QueueContext> = None;
 
     // Search state
@@ -925,6 +985,10 @@ fn run_player_loop(
                             }
                             KeyCode::Char('r') => {
                                 last_fetch = Instant::now() - poll_interval;
+                            }
+                            KeyCode::Char('?') => {
+                                show_help = !show_help;
+                                needs_redraw = true;
                             }
                             _ => {}
                         },
@@ -1228,7 +1292,11 @@ fn run_player_loop(
                             } => {
                                 draw_search_results_overlay(frame, results, *selected);
                             }
-                            PlayerMode::Normal => {}
+                            PlayerMode::Normal => {
+                                if show_help {
+                                    draw_help_overlay(frame);
+                                }
+                            }
                         }
                     })?;
                     last_drawn = Some(state);
