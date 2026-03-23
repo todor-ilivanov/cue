@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 
+mod anon;
 mod auth;
 mod client;
 mod commands;
@@ -127,7 +128,14 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let spotify = client::build_client(auth::load_config()?)?;
+    match auth::try_load_config()? {
+        Some(config) => run_authenticated(cli, config),
+        None => run_anonymous(cli),
+    }
+}
+
+fn run_authenticated(cli: Cli, config: auth::Config) -> Result<()> {
+    let spotify = client::build_client(config)?;
 
     let needs_device = !matches!(
         cli.command,
@@ -174,10 +182,56 @@ fn main() -> Result<()> {
                 commands::queue::queue_add(&spotify, &query, pick)?;
             }
         }
-        Command::Completions { .. } => {} // handled by early return above
+        Command::Completions { .. } => {}
     }
 
     client::persist_token(&spotify)?;
+
+    Ok(())
+}
+
+fn run_anonymous(cli: Cli) -> Result<()> {
+    match cli.command {
+        Command::Play {
+            query,
+            album,
+            playlist,
+            pick,
+        } => {
+            if playlist {
+                bail!(
+                    "playlist playback requires API credentials — set up config.toml\n\n\
+                       Run `cue play` without --playlist, or see `cue --help` for setup info"
+                );
+            }
+            let query = query.join(" ");
+            anon::play(&query, album, pick)?;
+        }
+        Command::Pause => anon::pause()?,
+        Command::Resume => anon::resume()?,
+        Command::Next => anon::next()?,
+        Command::Prev => anon::prev()?,
+        Command::Now => anon::now()?,
+        Command::Search { query, album } => {
+            let query = query.join(" ");
+            anon::search(&query, album)?;
+        }
+        Command::Volume { level } => anon::volume(level.as_deref())?,
+        Command::Player { .. }
+        | Command::Devices
+        | Command::Device { .. }
+        | Command::Queue { .. } => {
+            bail!(
+                "this command requires API credentials\n\n\
+                 Create ~/.config/cue/config.toml with:\n\n  \
+                 [spotify]\n  \
+                 client_id = \"<your_client_id>\"\n  \
+                 client_secret = \"<your_client_secret>\"\n\n\
+                 Get credentials at https://developer.spotify.com/dashboard"
+            );
+        }
+        Command::Completions { .. } => {}
+    }
 
     Ok(())
 }

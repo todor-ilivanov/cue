@@ -80,7 +80,9 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(base.join("cue"))
 }
 
-pub fn load_config() -> Result<Config> {
+/// Try to load config, returning None if the config file doesn't exist.
+/// This allows falling back to anonymous mode.
+pub fn try_load_config() -> Result<Option<Config>> {
     let dir = config_dir()?;
     fs::create_dir_all(&dir)
         .with_context(|| format!("could not create config directory: {}", dir.display()))?;
@@ -89,12 +91,10 @@ pub fn load_config() -> Result<Config> {
 
     let contents = match fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => bail!(
-            "config file not found: {}\n\nCreate it with:\n\n{CONFIG_FORMAT}\n\nGet credentials at https://developer.spotify.com/dashboard",
-            path.display()
-        ),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            return Err(e).with_context(|| format!("could not read config file: {}", path.display()))
+            return Err(e)
+                .with_context(|| format!("could not read config file: {}", path.display()))
         }
     };
 
@@ -112,8 +112,8 @@ pub fn load_config() -> Result<Config> {
         );
     }
 
-    Ok(Config {
+    Ok(Some(Config {
         client_id: file.spotify.client_id,
         client_secret: file.spotify.client_secret,
-    })
+    }))
 }
