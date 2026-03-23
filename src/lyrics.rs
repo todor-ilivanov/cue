@@ -411,16 +411,25 @@ fn draw_synced(
 
     let center = scroll_center.or(active).unwrap_or(0);
     let anchor_row = window / 2;
-    let start_idx = center.saturating_sub(anchor_row);
+
+    // When manually scrolling, always pin the center line at the visual
+    // middle so every j/k press shifts the viewport by exactly one line.
+    // In auto-scroll mode, clamp to avoid blank lines above the first lyric.
+    let virtual_start: isize = if scroll_center.is_some() {
+        center as isize - anchor_row as isize
+    } else {
+        center.saturating_sub(anchor_row) as isize
+    };
 
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(window);
 
     for row in 0..window {
-        let line_idx = start_idx + row;
-        if line_idx >= synced.lines.len() {
+        let line_idx_signed = virtual_start + row as isize;
+        if line_idx_signed < 0 || line_idx_signed >= synced.lines.len() as isize {
             rendered_lines.push(Line::from(""));
             continue;
         }
+        let line_idx = line_idx_signed as usize;
 
         let lyric = &synced.lines[line_idx];
         let text = if lyric.text.is_empty() {
@@ -448,11 +457,12 @@ fn draw_synced(
     // Distance indicator when in manual scroll mode
     if scroll_center.is_some() {
         if let Some(ai) = active {
-            let end_idx = start_idx + window;
-            let (arrow, dist, at_top) = if ai < start_idx {
-                ("\u{25b2}", start_idx - ai, true)
-            } else if ai >= end_idx {
-                ("\u{25bc}", ai - end_idx + 1, false)
+            let visible_start = virtual_start.max(0) as usize;
+            let visible_end = (virtual_start + window as isize).max(0) as usize;
+            let (arrow, dist, at_top) = if ai < visible_start {
+                ("\u{25b2}", visible_start - ai, true)
+            } else if ai >= visible_end {
+                ("\u{25bc}", ai - visible_end + 1, false)
             } else {
                 return;
             };
