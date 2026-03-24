@@ -341,7 +341,7 @@ pub fn draw_lyrics(
             draw_centered_dim(frame, content_area, "Instrumental");
         }
         LyricsState::Plain(text) => {
-            draw_plain(frame, content_area, text);
+            draw_plain(frame, content_area, text, scroll_center.unwrap_or(0) as u16);
         }
         LyricsState::Synced(synced) => {
             draw_synced(frame, content_area, synced, position_ms, scroll_center);
@@ -366,7 +366,7 @@ fn draw_centered_dim(frame: &mut Frame, area: Rect, msg: &str) {
     frame.render_widget(Paragraph::new(line), centered_area);
 }
 
-fn draw_plain(frame: &mut Frame, area: Rect, text: &str) {
+fn draw_plain(frame: &mut Frame, area: Rect, text: &str, scroll_offset: u16) {
     if area.height == 0 {
         return;
     }
@@ -389,20 +389,24 @@ fn draw_plain(frame: &mut Frame, area: Rect, text: &str) {
         .lines()
         .map(|l| Line::from(Span::styled(l, Style::new().fg(Color::Gray))))
         .collect();
-    let paragraph = Paragraph::new(plain_lines).wrap(ratatui::widgets::Wrap { trim: true });
+    let paragraph = Paragraph::new(plain_lines)
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .scroll((scroll_offset, 0));
     frame.render_widget(paragraph, text_area);
 }
 
-/// Auto-scroll clamps so we never show blank lines above the first lyric.
-/// Manual scroll always pins the center at the visual middle so every j/k
-/// press shifts by exactly one line.
-fn viewport_start(center: usize, window: usize, manual: bool) -> isize {
+/// Compute the first visible line index for the lyrics viewport.
+/// Both auto and manual modes clamp to [0, total_lines - window] so we
+/// never show blank lines above the first lyric or below the last.
+fn viewport_start(center: usize, window: usize, total_lines: usize, manual: bool) -> isize {
     let anchor = window / 2;
-    if manual {
+    let raw = if manual {
         center as isize - anchor as isize
     } else {
         center.saturating_sub(anchor) as isize
-    }
+    };
+    let max_start = (total_lines as isize - window as isize).max(0);
+    raw.max(0).min(max_start)
 }
 
 fn draw_synced(
@@ -422,7 +426,7 @@ fn draw_synced(
     let window = height;
 
     let center = scroll_center.or(active).unwrap_or(0);
-    let virtual_start = viewport_start(center, window, scroll_center.is_some());
+    let virtual_start = viewport_start(center, window, synced.lines.len(), scroll_center.is_some());
 
     let num_lines = synced.lines.len() as isize;
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(window);
@@ -638,46 +642,56 @@ mod tests {
 
     #[test]
     fn auto_scroll_clamps_at_top() {
-        assert_eq!(viewport_start(3, 40, false), 0);
-        assert_eq!(viewport_start(0, 40, false), 0);
-        assert_eq!(viewport_start(19, 40, false), 0);
+        assert_eq!(viewport_start(3, 40, 100, false), 0);
+        assert_eq!(viewport_start(0, 40, 100, false), 0);
+        assert_eq!(viewport_start(19, 40, 100, false), 0);
     }
 
     #[test]
     fn auto_scroll_scrolls_past_anchor() {
-        assert_eq!(viewport_start(20, 40, false), 0);
-        assert_eq!(viewport_start(21, 40, false), 1);
-        assert_eq!(viewport_start(30, 40, false), 10);
+        assert_eq!(viewport_start(20, 40, 100, false), 0);
+        assert_eq!(viewport_start(21, 40, 100, false), 1);
+        assert_eq!(viewport_start(30, 40, 100, false), 10);
     }
 
     #[test]
-    fn manual_scroll_always_centers() {
-        assert_eq!(viewport_start(3, 40, true), -17);
-        assert_eq!(viewport_start(0, 40, true), -20);
+    fn manual_scroll_clamps_at_top() {
+        // Manual scroll no longer goes negative — clamped to 0
+        assert_eq!(viewport_start(3, 40, 100, true), 0);
+        assert_eq!(viewport_start(0, 40, 100, true), 0);
     }
 
     #[test]
     fn manual_scroll_shifts_by_one() {
-        let a = viewport_start(5, 40, true);
-        let b = viewport_start(6, 40, true);
+        // Use center values past the anchor so clamping doesn't flatten them
+        let a = viewport_start(25, 40, 100, true);
+        let b = viewport_start(26, 40, 100, true);
         assert_eq!(b - a, 1);
 
-        let c = viewport_start(25, 40, true);
-        let d = viewport_start(26, 40, true);
+        let c = viewport_start(45, 40, 100, true);
+        let d = viewport_start(46, 40, 100, true);
         assert_eq!(d - c, 1);
     }
 
     #[test]
     fn manual_and_auto_agree_past_anchor() {
         assert_eq!(
-            viewport_start(30, 40, true),
-            viewport_start(30, 40, false)
+            viewport_start(30, 40, 100, true),
+            viewport_start(30, 40, 100, false)
         );
     }
 
     #[test]
+    fn scroll_clamps_at_bottom() {
+        // With 50 lines and window 40, max start is 10
+        assert_eq!(viewport_start(45, 40, 50, true), 10);
+        assert_eq!(viewport_start(49, 40, 50, false), 10);
+    }
+
+    #[test]
     fn small_window_manual_scroll() {
-        assert_eq!(viewport_start(2, 10, true), -3);
-        assert_eq!(viewport_start(3, 10, true), -2);
+        // With 30 lines and window 10, center 7 → raw 2, clamped to 2
+        assert_eq!(viewport_start(7, 10, 30, true), 2);
+        assert_eq!(viewport_start(8, 10, 30, true), 3);
     }
 }

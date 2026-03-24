@@ -971,24 +971,44 @@ fn run_player_loop(
                             }
                             KeyCode::Char('j') | KeyCode::Char('k') => {
                                 if show_lyrics {
-                                    if let LyricsState::Synced(ref synced) = lyrics_state {
-                                        let current = lyrics_scroll_center.unwrap_or_else(|| {
-                                            info.as_ref()
-                                                .map(|t| {
-                                                    let pm =
-                                                        current_progress_ms(t, fetch_anchor) as u64;
-                                                    synced.active_line_index(pm).unwrap_or(0)
-                                                })
-                                                .unwrap_or(0)
-                                        });
-                                        let max_line = synced.lines.len().saturating_sub(1);
-                                        lyrics_scroll_center =
-                                            Some(if key.code == KeyCode::Char('j') {
-                                                current.saturating_add(1).min(max_line)
-                                            } else {
-                                                current.saturating_sub(1)
-                                            });
-                                        needs_redraw = true;
+                                    match lyrics_state {
+                                        LyricsState::Synced(ref synced) => {
+                                            let current =
+                                                lyrics_scroll_center.unwrap_or_else(|| {
+                                                    info.as_ref()
+                                                        .map(|t| {
+                                                            let pm = current_progress_ms(
+                                                                t,
+                                                                fetch_anchor,
+                                                            )
+                                                                as u64;
+                                                            synced
+                                                                .active_line_index(pm)
+                                                                .unwrap_or(0)
+                                                        })
+                                                        .unwrap_or(0)
+                                                });
+                                            let max_line = synced.lines.len().saturating_sub(1);
+                                            lyrics_scroll_center =
+                                                Some(if key.code == KeyCode::Char('j') {
+                                                    current.saturating_add(1).min(max_line)
+                                                } else {
+                                                    current.saturating_sub(1)
+                                                });
+                                            needs_redraw = true;
+                                        }
+                                        LyricsState::Plain(ref text) => {
+                                            let current = lyrics_scroll_center.unwrap_or(0);
+                                            let max_line = text.lines().count().saturating_sub(1);
+                                            lyrics_scroll_center =
+                                                Some(if key.code == KeyCode::Char('j') {
+                                                    current.saturating_add(1).min(max_line)
+                                                } else {
+                                                    current.saturating_sub(1)
+                                                });
+                                            needs_redraw = true;
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
