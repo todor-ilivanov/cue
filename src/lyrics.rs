@@ -341,7 +341,7 @@ pub fn draw_lyrics(
             draw_centered_dim(frame, content_area, "Instrumental");
         }
         LyricsState::Plain(text) => {
-            draw_plain(frame, content_area, text, scroll_center.unwrap_or(0) as u16);
+            draw_plain(frame, content_area, text, scroll_center.unwrap_or(0));
         }
         LyricsState::Synced(synced) => {
             draw_synced(frame, content_area, synced, position_ms, scroll_center);
@@ -366,7 +366,7 @@ fn draw_centered_dim(frame: &mut Frame, area: Rect, msg: &str) {
     frame.render_widget(Paragraph::new(line), centered_area);
 }
 
-fn draw_plain(frame: &mut Frame, area: Rect, text: &str, scroll_offset: u16) {
+fn draw_plain(frame: &mut Frame, area: Rect, text: &str, scroll_offset: usize) {
     if area.height == 0 {
         return;
     }
@@ -391,7 +391,7 @@ fn draw_plain(frame: &mut Frame, area: Rect, text: &str, scroll_offset: u16) {
         .collect();
     let paragraph = Paragraph::new(plain_lines)
         .wrap(ratatui::widgets::Wrap { trim: true })
-        .scroll((scroll_offset, 0));
+        .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0));
     frame.render_widget(paragraph, text_area);
 }
 

@@ -971,7 +971,7 @@ fn run_player_loop(
                             }
                             KeyCode::Char('j') | KeyCode::Char('k') => {
                                 if show_lyrics {
-                                    match lyrics_state {
+                                    let bounds = match lyrics_state {
                                         LyricsState::Synced(ref synced) => {
                                             let current =
                                                 lyrics_scroll_center.unwrap_or_else(|| {
@@ -988,27 +988,22 @@ fn run_player_loop(
                                                         })
                                                         .unwrap_or(0)
                                                 });
-                                            let max_line = synced.lines.len().saturating_sub(1);
-                                            lyrics_scroll_center =
-                                                Some(if key.code == KeyCode::Char('j') {
-                                                    current.saturating_add(1).min(max_line)
-                                                } else {
-                                                    current.saturating_sub(1)
-                                                });
-                                            needs_redraw = true;
+                                            Some((current, synced.lines.len().saturating_sub(1)))
                                         }
-                                        LyricsState::Plain(ref text) => {
-                                            let current = lyrics_scroll_center.unwrap_or(0);
-                                            let max_line = text.lines().count().saturating_sub(1);
-                                            lyrics_scroll_center =
-                                                Some(if key.code == KeyCode::Char('j') {
-                                                    current.saturating_add(1).min(max_line)
-                                                } else {
-                                                    current.saturating_sub(1)
-                                                });
-                                            needs_redraw = true;
-                                        }
-                                        _ => {}
+                                        LyricsState::Plain(ref text) => Some((
+                                            lyrics_scroll_center.unwrap_or(0),
+                                            text.lines().count().saturating_sub(1),
+                                        )),
+                                        _ => None,
+                                    };
+                                    if let Some((current, max_line)) = bounds {
+                                        lyrics_scroll_center =
+                                            Some(if key.code == KeyCode::Char('j') {
+                                                current.saturating_add(1).min(max_line)
+                                            } else {
+                                                current.saturating_sub(1)
+                                            });
+                                        needs_redraw = true;
                                     }
                                 }
                             }
