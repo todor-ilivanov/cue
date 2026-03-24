@@ -701,17 +701,17 @@ fn draw_help_overlay(frame: &mut Frame) {
     let dim_style = Style::new().fg(Color::DarkGray);
 
     let bindings: &[(&str, &str)] = &[
-        ("       space", "Pause / resume"),
-        ("       n / p", "Next / previous track"),
-        ("   \u{2190} / \u{2192}", "Seek backward / forward 5s"),
-        ("   \u{2191} / \u{2193}", "Volume up / down"),
-        ("           l", "Toggle lyrics"),
-        ("       j / k", "Scroll lyrics"),
-        ("           s", "Sync lyrics to playback"),
-        ("           q", "Toggle queue"),
-        ("           /", "Search tracks, albums, playlists"),
-        ("           r", "Refresh now playing"),
-        ("         esc", "Quit"),
+        ("space",  "Pause / resume"),
+        ("n / p",  "Next / previous track"),
+        ("← / →",  "Seek backward / forward 5s"),
+        ("↑ / ↓",  "Volume up / down"),
+        ("l",      "Toggle lyrics"),
+        ("j / k",  "Scroll lyrics"),
+        ("s",      "Sync lyrics to playback"),
+        ("q",      "Toggle queue"),
+        ("/",      "Search tracks, albums, playlists"),
+        ("r",      "Refresh now playing"),
+        ("esc",    "Quit"),
     ];
 
     let box_width: u16 = 48;
@@ -735,19 +735,17 @@ fn draw_help_overlay(frame: &mut Frame) {
 
     for (i, &(key, desc)) in bindings.iter().enumerate() {
         let row = Rect {
+            x: inner.x + 2,
             y: inner.y + 1 + i as u16,
+            width: inner.width.saturating_sub(2),
             height: 1,
-            ..inner
         };
         if row.y >= inner.y + inner.height {
             break;
         }
-        let line = Line::from(vec![
-            Span::styled(key, key_style),
-            Span::styled("  ", Style::new()),
-            Span::styled(desc, desc_style),
-        ]);
-        frame.render_widget(Paragraph::new(line), row);
+        let cols = Layout::horizontal([Constraint::Length(10), Constraint::Min(0)]).split(row);
+        frame.render_widget(Paragraph::new(Span::styled(key, key_style)), cols[0]);
+        frame.render_widget(Paragraph::new(Span::styled(desc, desc_style)), cols[1]);
     }
 
     let dismiss_area = Rect {
