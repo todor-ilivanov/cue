@@ -316,12 +316,12 @@ pub fn draw_lyrics(
 
     let has_content = matches!(state, LyricsState::Synced(_) | LyricsState::Plain(_));
 
-    // Only show the lyrics separator when there is actual content.
-    // For status states (Loading/None/Instrumental), the separator below
-    // the now-playing card already provides visual separation.
-    let content_y_offset = if has_content {
+    if has_content {
         let sep_area = Rect { height: 1, ..area };
         frame.render_widget(Paragraph::new(build_lyrics_separator(area.width)), sep_area);
+    }
+
+    let content_y_offset = if has_content {
         if area.height > 4 {
             2
         } else {
