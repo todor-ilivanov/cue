@@ -314,12 +314,23 @@ pub fn draw_lyrics(
         return;
     }
 
-    // Render separator header
-    let sep_area = Rect { height: 1, ..area };
-    frame.render_widget(Paragraph::new(build_lyrics_separator(area.width)), sep_area);
+    let has_content = matches!(state, LyricsState::Synced(_) | LyricsState::Plain(_));
 
-    // Content area below separator (+ 1 blank line for breathing room)
-    let content_y_offset = if area.height > 4 { 2 } else { 1 };
+    // Only show the lyrics separator when there is actual content.
+    // For status states (Loading/None/Instrumental), the separator below
+    // the now-playing card already provides visual separation.
+    let content_y_offset = if has_content {
+        let sep_area = Rect { height: 1, ..area };
+        frame.render_widget(Paragraph::new(build_lyrics_separator(area.width)), sep_area);
+        if area.height > 4 {
+            2
+        } else {
+            1
+        }
+    } else {
+        0
+    };
+
     let content_area = Rect {
         y: area.y + content_y_offset,
         height: area.height.saturating_sub(content_y_offset),
