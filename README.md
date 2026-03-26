@@ -2,7 +2,13 @@
 
 A command-line Spotify remote control. It talks to the Spotify Web API to control playback on whatever device is already running. It does not stream audio.
 
-<!-- TODO: Add a terminal recording (asciinema/GIF) of `cue player` showing lyrics -->
+![cue player demo](assets/demo.png)
+
+## Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- A [Spotify Premium](https://www.spotify.com/premium/) account (Web API playback control requires Premium)
+- A Spotify app with a Client ID and Client Secret (see [Spotify app setup](#spotify-app-setup))
 
 ## Features
 
@@ -103,3 +109,7 @@ cue completions bash >> ~/.bashrc
 cue completions zsh > ~/.zfunc/_cue
 cue completions fish > ~/.config/fish/completions/cue.fish
 ```
+
+## License
+
+[MIT](LICENSE)
