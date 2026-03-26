@@ -89,6 +89,7 @@ struct TrackInfo {
     progress_ms: i64,
     is_playing: bool,
     volume_percent: Option<u32>,
+    context_uri: Option<String>,
 }
 
 fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
@@ -119,6 +120,8 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
         ),
     };
 
+    let context_uri = ctx.context.map(|c| c.uri);
+
     Ok(Some(TrackInfo {
         title,
         artist,
@@ -127,6 +130,7 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
         progress_ms,
         is_playing,
         volume_percent,
+        context_uri,
     }))
 }
 
@@ -180,6 +184,27 @@ fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
 
     let sep_area = Rect { height: 1, ..area };
     frame.render_widget(Paragraph::new(build_queue_separator(area.width)), sep_area);
+
+    if ctx.is_autoplay || ctx.next.is_empty() {
+        if area.height > 1 {
+            let msg = if ctx.is_autoplay {
+                "No queued songs \u{2014} playing from autoplay"
+            } else {
+                "Queue empty"
+            };
+            let row = Rect {
+                y: area.y + 1,
+                height: 1,
+                ..area
+            };
+            let line = Line::from(Span::styled(
+                format!("  {msg}"),
+                Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            ));
+            frame.render_widget(Paragraph::new(line), row);
+        }
+        return;
+    }
 
     let mut y = area.y + 1;
     for entry in &ctx.next {
@@ -254,15 +279,16 @@ fn draw_playing(
     let sep_below_row = constraints.len();
     constraints.push(Constraint::Length(1));
 
-    // Queue section (separator + items)
+    // Queue section (separator + items or autoplay message)
     let queue_row = if let Some(ctx) = queue_context {
-        if ctx.next.is_empty() {
-            None
+        let rows = if ctx.is_autoplay || ctx.next.is_empty() {
+            2 // separator + message
         } else {
-            let r = constraints.len();
-            constraints.push(Constraint::Length(1 + ctx.next.len() as u16));
-            Some(r)
-        }
+            1 + ctx.next.len() as u16
+        };
+        let r = constraints.len();
+        constraints.push(Constraint::Length(rows));
+        Some(r)
     } else {
         None
     };
@@ -701,17 +727,17 @@ fn draw_help_overlay(frame: &mut Frame) {
     let dim_style = Style::new().fg(Color::DarkGray);
 
     let bindings: &[(&str, &str)] = &[
-        ("space",  "Pause / resume"),
-        ("n / p",  "Next / previous track"),
-        ("← / →",  "Seek backward / forward 5s"),
-        ("↑ / ↓",  "Volume up / down"),
-        ("l",      "Toggle lyrics"),
-        ("j / k",  "Scroll lyrics"),
-        ("s",      "Sync lyrics to playback"),
-        ("q",      "Toggle queue"),
-        ("/",      "Search tracks, albums, playlists"),
-        ("r",      "Refresh now playing"),
-        ("esc",    "Quit"),
+        ("space", "Pause / resume"),
+        ("n / p", "Next / previous track"),
+        ("← / →", "Seek backward / forward 5s"),
+        ("↑ / ↓", "Volume up / down"),
+        ("l", "Toggle lyrics"),
+        ("j / k", "Scroll lyrics"),
+        ("s", "Sync lyrics to playback"),
+        ("q", "Toggle queue"),
+        ("/", "Search tracks, albums, playlists"),
+        ("r", "Refresh now playing"),
+        ("esc", "Quit"),
     ];
 
     let box_width: u16 = 48;
@@ -872,7 +898,9 @@ fn run_player_loop(
                             KeyCode::Char('q') => {
                                 show_queue = !show_queue;
                                 if show_queue && queue_context.is_none() {
-                                    if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
+                                    let ctx_uri =
+                                        info.as_ref().and_then(|t| t.context_uri.as_deref());
+                                    if let Ok(ctx) = fetch_queue_context(spotify, 0, 5, ctx_uri) {
                                         queue_context = Some(ctx);
                                     }
                                 }
@@ -1158,7 +1186,8 @@ fn run_player_loop(
 
             // Re-fetch queue while visible.
             if show_queue {
-                if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
+                let ctx_uri = info.as_ref().and_then(|t| t.context_uri.as_deref());
+                if let Ok(ctx) = fetch_queue_context(spotify, 0, 5, ctx_uri) {
                     queue_context = Some(ctx);
                 }
             }

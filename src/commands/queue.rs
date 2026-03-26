@@ -76,13 +76,35 @@ pub struct QueueContext {
     pub previous: Vec<SongEntry>,
     pub current: Option<SongEntry>,
     pub next: Vec<SongEntry>,
+    pub is_autoplay: bool,
+}
+
+/// Extract the album ID from a `spotify:album:<id>` context URI.
+fn album_id_from_context_uri(uri: &str) -> Option<&str> {
+    uri.strip_prefix("spotify:album:")
+}
+
+/// Check whether a queue item belongs to the given album context.
+fn track_matches_album(item: &PlayableItem, album_id: &str) -> bool {
+    match item {
+        PlayableItem::Track(track) => track
+            .album
+            .id
+            .as_ref()
+            .map(|id| id.id() == album_id)
+            .unwrap_or(false),
+        PlayableItem::Episode(_) => false,
+    }
 }
 
 pub fn fetch_queue_context(
     spotify: &AuthCodeSpotify,
     prev_count: usize,
     next_count: usize,
+    context_uri: Option<&str>,
 ) -> Result<QueueContext> {
+    let is_autoplay = context_uri.is_none();
+
     let queue = spotify
         .current_user_queue()
         .context("failed to get queue")?;
@@ -92,15 +114,24 @@ pub fn fetch_queue_context(
         SongEntry { title, artist }
     });
 
-    let next: Vec<SongEntry> = queue
-        .queue
-        .iter()
-        .take(next_count)
-        .map(|item| {
-            let (title, artist) = playable_song_parts(item);
-            SongEntry { title, artist }
-        })
-        .collect();
+    let next: Vec<SongEntry> = if is_autoplay {
+        Vec::new()
+    } else {
+        let album_filter = context_uri.and_then(album_id_from_context_uri);
+        queue
+            .queue
+            .iter()
+            .filter(|item| match album_filter {
+                Some(album_id) => track_matches_album(item, album_id),
+                None => true,
+            })
+            .take(next_count)
+            .map(|item| {
+                let (title, artist) = playable_song_parts(item);
+                SongEntry { title, artist }
+            })
+            .collect()
+    };
 
     let previous = if prev_count == 0 {
         Vec::new()
@@ -126,11 +157,18 @@ pub fn fetch_queue_context(
         previous,
         current,
         next,
+        is_autoplay,
     })
 }
 
 pub fn queue_show(spotify: &AuthCodeSpotify) -> Result<()> {
-    let ctx = ui::with_spinner("Fetching queue...", || fetch_queue_context(spotify, 2, 2))?;
+    let context_uri = ui::with_spinner("Fetching queue...", || {
+        let playback = super::current_playback(spotify)?;
+        Ok(playback.and_then(|p| p.context).map(|c| c.uri))
+    })?;
+    let ctx = ui::with_spinner("Fetching queue...", || {
+        fetch_queue_context(spotify, 2, 2, context_uri.as_deref())
+    })?;
 
     print_queue_context(&ctx);
     Ok(())
@@ -160,12 +198,21 @@ fn print_queue_context(ctx: &QueueContext) {
         ),
     }
 
-    for entry in &ctx.next {
-        let line = ui::styled_song(&entry.title, &entry.artist);
+    if ctx.is_autoplay {
+        let msg = "No queued songs — playing from autoplay";
         if interactive {
-            println!("  {}", console::style(line).dim());
+            println!("  {}", console::style(msg).dim());
         } else {
-            println!("  {line}");
+            println!("  {msg}");
+        }
+    } else {
+        for entry in &ctx.next {
+            let line = ui::styled_song(&entry.title, &entry.artist);
+            if interactive {
+                println!("  {}", console::style(line).dim());
+            } else {
+                println!("  {line}");
+            }
         }
     }
 }
