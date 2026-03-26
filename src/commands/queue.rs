@@ -67,6 +67,8 @@ fn playable_song_parts(item: &PlayableItem) -> (String, String) {
     }
 }
 
+pub const AUTOPLAY_MSG: &str = "No queued songs \u{2014} playing from autoplay";
+
 pub struct SongEntry {
     pub title: String,
     pub artist: String,
@@ -105,20 +107,20 @@ pub fn fetch_queue_context(
 ) -> Result<QueueContext> {
     let is_autoplay = context_uri.is_none();
 
-    let queue = spotify
-        .current_user_queue()
-        .context("failed to get queue")?;
-
-    let current = queue.currently_playing.as_ref().map(|item| {
-        let (title, artist) = playable_song_parts(item);
-        SongEntry { title, artist }
-    });
-
-    let next: Vec<SongEntry> = if is_autoplay {
-        Vec::new()
+    let (current, next) = if is_autoplay {
+        (None, Vec::new())
     } else {
+        let queue = spotify
+            .current_user_queue()
+            .context("failed to get queue")?;
+
+        let current = queue.currently_playing.as_ref().map(|item| {
+            let (title, artist) = playable_song_parts(item);
+            SongEntry { title, artist }
+        });
+
         let album_filter = context_uri.and_then(album_id_from_context_uri);
-        queue
+        let next = queue
             .queue
             .iter()
             .filter(|item| match album_filter {
@@ -130,7 +132,9 @@ pub fn fetch_queue_context(
                 let (title, artist) = playable_song_parts(item);
                 SongEntry { title, artist }
             })
-            .collect()
+            .collect();
+
+        (current, next)
     };
 
     let previous = if prev_count == 0 {
@@ -199,7 +203,7 @@ fn print_queue_context(ctx: &QueueContext) {
     }
 
     if ctx.is_autoplay {
-        let msg = "No queued songs — playing from autoplay";
+        let msg = AUTOPLAY_MSG;
         if interactive {
             println!("  {}", console::style(msg).dim());
         } else {

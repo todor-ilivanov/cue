@@ -11,7 +11,7 @@ use rspotify::model::{
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
-use super::queue::{fetch_queue_context, QueueContext, SongEntry};
+use super::queue::{fetch_queue_context, QueueContext, SongEntry, AUTOPLAY_MSG};
 use super::{api_error, join_artist_names};
 use crate::lyrics::{self, LyricsState};
 use crate::ui;
@@ -188,7 +188,7 @@ fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
     if ctx.is_autoplay || ctx.next.is_empty() {
         if area.height > 1 {
             let msg = if ctx.is_autoplay {
-                "No queued songs \u{2014} playing from autoplay"
+                AUTOPLAY_MSG
             } else {
                 "Queue empty"
             };
