@@ -59,7 +59,19 @@ step "Installing binary"
 
 binary="$PWD/target/release/cue"
 
-default_dir="$HOME/.local/bin"
+case "$OSTYPE" in
+    darwin*)
+        if [[ ":$PATH:" == *":/opt/homebrew/bin:"* ]]; then
+            default_dir="/opt/homebrew/bin"
+        else
+            default_dir="/usr/local/bin"
+        fi
+        ;;
+    *)
+        default_dir="$HOME/.local/bin"
+        ;;
+esac
+
 if [ "$upgrading" = "1" ]; then
     existing_path=$(command -v cue)
     default_dir=$(dirname "$existing_path")
@@ -81,7 +93,20 @@ echo "  Installed to $install_dir/cue"
 
 if [[ ":$PATH:" != *":$install_dir:"* ]]; then
     warn "$install_dir is not in your PATH"
-    echo "  Add it with: export PATH=\"$install_dir:\$PATH\""
+    case "$OSTYPE" in
+        darwin*) shell_rc="$HOME/.zshrc" ;;
+        *)
+            if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "${SHELL:-}")" = "zsh" ]; then
+                shell_rc="${ZDOTDIR:-$HOME}/.zshrc"
+            elif [ -f "$HOME/.bashrc" ]; then
+                shell_rc="$HOME/.bashrc"
+            else
+                shell_rc="$HOME/.profile"
+            fi
+            ;;
+    esac
+    echo "  Add it to your $shell_rc:"
+    echo "    echo 'export PATH=\"$install_dir:\$PATH\"' >> $shell_rc"
 fi
 
 # --- Spotify credentials ---
