@@ -635,6 +635,27 @@ fn build_hints_empty(width: u16) -> Line<'static> {
     }
 }
 
+fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
+    match mode {
+        PlayerMode::SearchInput { query, category } => {
+            draw_search_input_bar(frame, query, *category);
+        }
+        PlayerMode::SearchLoading { .. } => {
+            draw_search_loading_overlay(frame);
+        }
+        PlayerMode::SearchResults {
+            results, selected, ..
+        } => {
+            draw_search_results_overlay(frame, results, *selected);
+        }
+        PlayerMode::Normal => {
+            if show_help {
+                draw_help_overlay(frame);
+            }
+        }
+    }
+}
+
 fn progress_bar_width(
     content_width: u16,
     progress_secs: i64,
@@ -1364,24 +1385,7 @@ fn run_player_loop(
                             effective_queue,
                             status_message.as_ref().map(|(msg, _)| msg.as_str()),
                         );
-                        match &mode {
-                            PlayerMode::SearchInput { query, category } => {
-                                draw_search_input_bar(frame, query, *category);
-                            }
-                            PlayerMode::SearchLoading { .. } => {
-                                draw_search_loading_overlay(frame);
-                            }
-                            PlayerMode::SearchResults {
-                                results, selected, ..
-                            } => {
-                                draw_search_results_overlay(frame, results, *selected);
-                            }
-                            PlayerMode::Normal => {
-                                if show_help {
-                                    draw_help_overlay(frame);
-                                }
-                            }
-                        }
+                        draw_mode_overlays(frame, &mode, show_help);
                     })?;
                     last_drawn = Some(state);
                 }
@@ -1390,24 +1394,7 @@ fn run_player_loop(
                 if needs_redraw || last_drawn.is_some() {
                     terminal.draw(|frame| {
                         draw_empty(frame, status_message.as_ref().map(|(msg, _)| msg.as_str()));
-                        match &mode {
-                            PlayerMode::SearchInput { query, category } => {
-                                draw_search_input_bar(frame, query, *category);
-                            }
-                            PlayerMode::SearchLoading { .. } => {
-                                draw_search_loading_overlay(frame);
-                            }
-                            PlayerMode::SearchResults {
-                                results, selected, ..
-                            } => {
-                                draw_search_results_overlay(frame, results, *selected);
-                            }
-                            PlayerMode::Normal => {
-                                if show_help {
-                                    draw_help_overlay(frame);
-                                }
-                            }
-                        }
+                        draw_mode_overlays(frame, &mode, show_help);
                     })?;
                     last_drawn = None;
                 }
