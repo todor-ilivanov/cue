@@ -561,32 +561,99 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
     }
 }
 
-fn draw_empty(frame: &mut Frame) {
-    let area = frame.area();
+fn draw_empty(frame: &mut Frame, status_message: Option<&str>) {
+    let content = content_rect(frame.area());
 
     let rows = Layout::vertical([
-        Constraint::Length(1), // blank
+        Constraint::Min(0),    // top spacer
         Constraint::Length(1), // "Not playing"
-        Constraint::Min(0),    // spacer
+        Constraint::Length(2), // gap + action hint
+        Constraint::Length(1), // status message
+        Constraint::Min(0),    // bottom spacer
         Constraint::Length(1), // hints
     ])
-    .split(area);
+    .split(content);
 
-    let msg = Line::from(Span::styled(
-        "Not playing",
-        Style::new().fg(Color::DarkGray),
-    ));
-    frame.render_widget(Paragraph::new(msg), rows[1]);
+    let msg = Line::from(Span::styled("Not playing", Style::new().fg(Color::Gray)));
+    frame.render_widget(
+        Paragraph::new(msg).alignment(ratatui::layout::Alignment::Center),
+        rows[1],
+    );
 
     let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(Color::DarkGray);
-    let hints = Line::from(vec![
-        Span::styled("r", key_style),
-        Span::styled(" refresh  ", desc_style),
-        Span::styled("esc", key_style),
-        Span::styled(" quit", desc_style),
+
+    let action_hint = Line::from(vec![
+        Span::styled("space", key_style),
+        Span::styled(" resume  ", desc_style),
+        Span::styled("/", key_style),
+        Span::styled(" search", desc_style),
     ]);
-    frame.render_widget(Paragraph::new(hints), rows[3]);
+    frame.render_widget(
+        Paragraph::new(action_hint).alignment(ratatui::layout::Alignment::Center),
+        rows[2],
+    );
+
+    if let Some(msg) = status_message {
+        let status = Line::from(Span::styled(msg, Style::new().fg(Color::Red)));
+        frame.render_widget(
+            Paragraph::new(status).alignment(ratatui::layout::Alignment::Center),
+            rows[3],
+        );
+    }
+
+    let hints = build_hints_empty(content.width);
+    frame.render_widget(Paragraph::new(hints), rows[5]);
+}
+
+fn build_hints_empty(width: u16) -> Line<'static> {
+    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
+
+    if width < 50 {
+        Line::from(vec![
+            Span::styled("spc", key_style),
+            Span::styled(" resume  ", desc_style),
+            Span::styled("/", key_style),
+            Span::styled(" search  ", desc_style),
+            Span::styled("esc", key_style),
+            Span::styled(" quit", desc_style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("space", key_style),
+            Span::styled(" resume  ", desc_style),
+            Span::styled("/", key_style),
+            Span::styled(" search  ", desc_style),
+            Span::styled("r", key_style),
+            Span::styled(" refresh  ", desc_style),
+            Span::styled("?", key_style),
+            Span::styled(" help  ", desc_style),
+            Span::styled("esc", key_style),
+            Span::styled(" quit", desc_style),
+        ])
+    }
+}
+
+fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
+    match mode {
+        PlayerMode::SearchInput { query, category } => {
+            draw_search_input_bar(frame, query, *category);
+        }
+        PlayerMode::SearchLoading { .. } => {
+            draw_search_loading_overlay(frame);
+        }
+        PlayerMode::SearchResults {
+            results, selected, ..
+        } => {
+            draw_search_results_overlay(frame, results, *selected);
+        }
+        PlayerMode::Normal => {
+            if show_help {
+                draw_help_overlay(frame);
+            }
+        }
+    }
 }
 
 fn progress_bar_width(
@@ -701,17 +768,17 @@ fn draw_help_overlay(frame: &mut Frame) {
     let dim_style = Style::new().fg(Color::DarkGray);
 
     let bindings: &[(&str, &str)] = &[
-        ("space",  "Pause / resume"),
-        ("n / p",  "Next / previous track"),
-        ("← / →",  "Seek backward / forward 5s"),
-        ("↑ / ↓",  "Volume up / down"),
-        ("l",      "Toggle lyrics"),
-        ("j / k",  "Scroll lyrics"),
-        ("s",      "Sync lyrics to playback"),
-        ("q",      "Toggle queue"),
-        ("/",      "Search tracks, albums, playlists"),
-        ("r",      "Refresh now playing"),
-        ("esc",    "Quit"),
+        ("space", "Pause / resume"),
+        ("n / p", "Next / previous track"),
+        ("← / →", "Seek backward / forward 5s"),
+        ("↑ / ↓", "Volume up / down"),
+        ("l", "Toggle lyrics"),
+        ("j / k", "Scroll lyrics"),
+        ("s", "Sync lyrics to playback"),
+        ("q", "Toggle queue"),
+        ("/", "Search tracks, albums, playlists"),
+        ("r", "Refresh now playing"),
+        ("esc", "Quit"),
     ];
 
     let box_width: u16 = 48;
@@ -889,17 +956,27 @@ fn run_player_loop(
                                         } else {
                                             t.is_playing = false;
                                         }
+                                    } else if let Err(e) = spotify.resume_playback(None, None) {
+                                        status_message =
+                                            Some((format!("resume failed: {e}"), Instant::now()));
                                     } else {
-                                        if let Err(e) = spotify.resume_playback(None, None) {
+                                        t.is_playing = true;
+                                    }
+                                    fetch_anchor = Instant::now();
+                                    needs_redraw = true;
+                                } else {
+                                    match spotify.resume_playback(None, None) {
+                                        Err(e) => {
                                             status_message = Some((
                                                 format!("resume failed: {e}"),
                                                 Instant::now(),
                                             ));
-                                        } else {
-                                            t.is_playing = true;
+                                        }
+                                        Ok(()) => {
+                                            deferred_fetch =
+                                                Some(Instant::now() + Duration::from_millis(800));
                                         }
                                     }
-                                    fetch_anchor = Instant::now();
                                     needs_redraw = true;
                                 }
                             }
@@ -1308,31 +1385,17 @@ fn run_player_loop(
                             effective_queue,
                             status_message.as_ref().map(|(msg, _)| msg.as_str()),
                         );
-                        match &mode {
-                            PlayerMode::SearchInput { query, category } => {
-                                draw_search_input_bar(frame, query, *category);
-                            }
-                            PlayerMode::SearchLoading { .. } => {
-                                draw_search_loading_overlay(frame);
-                            }
-                            PlayerMode::SearchResults {
-                                results, selected, ..
-                            } => {
-                                draw_search_results_overlay(frame, results, *selected);
-                            }
-                            PlayerMode::Normal => {
-                                if show_help {
-                                    draw_help_overlay(frame);
-                                }
-                            }
-                        }
+                        draw_mode_overlays(frame, &mode, show_help);
                     })?;
                     last_drawn = Some(state);
                 }
             }
             None => {
                 if needs_redraw || last_drawn.is_some() {
-                    terminal.draw(draw_empty)?;
+                    terminal.draw(|frame| {
+                        draw_empty(frame, status_message.as_ref().map(|(msg, _)| msg.as_str()));
+                        draw_mode_overlays(frame, &mode, show_help);
+                    })?;
                     last_drawn = None;
                 }
             }
