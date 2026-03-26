@@ -2,6 +2,8 @@
 
 A command-line Spotify remote control. It talks to the Spotify Web API to control playback on whatever device is already running. It does not stream audio.
 
+![cue player demo](assets/demo.gif)
+
 ## Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
