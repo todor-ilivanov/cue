@@ -55,6 +55,7 @@ enum SearchPlayTarget {
     Playlist(PlaylistId<'static>),
 }
 
+#[derive(Clone)]
 struct SearchResultEntry {
     title: String,
     subtitle: String,
@@ -944,7 +945,7 @@ fn run_player_loop(
                     // Collect deferred actions to avoid borrow conflicts with mode
                     let mut submit_search: Option<(String, SearchCategory)> = None;
                     let mut play_target: Option<SearchPlayTarget> = None;
-                    let mut queue_target: Option<(SearchPlayTarget, String, String)> = None;
+                    let mut queue_target: Option<SearchResultEntry> = None;
 
                     match &mut mode {
                         PlayerMode::Normal => match key.code {
@@ -1169,12 +1170,7 @@ fn run_player_loop(
                                 }
                             }
                             KeyCode::Char('a') => {
-                                let entry = &results[*selected];
-                                queue_target = Some((
-                                    entry.target.clone(),
-                                    entry.title.clone(),
-                                    entry.subtitle.clone(),
-                                ));
+                                queue_target = Some(results[*selected].clone());
                             }
                             KeyCode::Esc => {
                                 mode = PlayerMode::Normal;
@@ -1237,14 +1233,17 @@ fn run_player_loop(
                         needs_redraw = true;
                     }
 
-                    if let Some((target, title, subtitle)) = queue_target {
-                        match target {
+                    if let Some(entry) = queue_target {
+                        match entry.target {
                             SearchPlayTarget::Track(id) => {
                                 let playable = PlayableId::Track(id);
                                 match spotify.add_item_to_queue(playable, None) {
                                     Ok(()) => {
                                         status_message = Some((
-                                            format!("Queued: {} \u{2014} {}", title, subtitle),
+                                            format!(
+                                                "Queued: {} \u{2014} {}",
+                                                entry.title, entry.subtitle
+                                            ),
                                             Instant::now(),
                                         ));
                                     }
