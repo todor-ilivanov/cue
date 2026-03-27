@@ -12,9 +12,10 @@ use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
 use super::queue::{fetch_queue_context, QueueContext, SongEntry};
-use super::{api_error, join_artist_names};
+use super::{api_error, join_artist_names, positional_popularity};
+use crate::auth;
 use crate::lyrics::{self, LyricsState};
-use crate::ui;
+use crate::ui::{self, rank_candidates, PickCandidate};
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -60,6 +61,41 @@ struct SearchResultEntry {
     title: String,
     subtitle: String,
     target: SearchPlayTarget,
+    popularity: Option<u32>,
+}
+
+impl SearchResultEntry {
+    fn target_uri(&self) -> String {
+        match &self.target {
+            SearchPlayTarget::Track(id) => format!("spotify:track:{}", id.id()),
+            SearchPlayTarget::Album(id) => format!("spotify:album:{}", id.id()),
+            SearchPlayTarget::Playlist(id) => format!("spotify:playlist:{}", id.id()),
+        }
+    }
+
+    fn target_type(&self) -> &'static str {
+        match &self.target {
+            SearchPlayTarget::Track(_) => "track",
+            SearchPlayTarget::Album(_) => "album",
+            SearchPlayTarget::Playlist(_) => "playlist",
+        }
+    }
+}
+
+fn parse_target_uri(uri: &str, target_type: &str) -> Option<SearchPlayTarget> {
+    let id = uri.rsplit(':').next()?.to_string();
+    match target_type {
+        "track" => Some(SearchPlayTarget::Track(
+            TrackId::from_id(&id).ok()?.into_static(),
+        )),
+        "album" => Some(SearchPlayTarget::Album(
+            AlbumId::from_id(&id).ok()?.into_static(),
+        )),
+        "playlist" => Some(SearchPlayTarget::Playlist(
+            PlaylistId::from_id(&id).ok()?.into_static(),
+        )),
+        _ => None,
+    }
 }
 
 enum PlayerMode {
@@ -350,12 +386,28 @@ fn perform_search(
     }
 }
 
+fn rank_search_entries(query: &str, entries: Vec<SearchResultEntry>) -> Vec<SearchResultEntry> {
+    let candidates: Vec<PickCandidate> = entries
+        .iter()
+        .map(|e| PickCandidate {
+            name: e.title.clone(),
+            label: format!("{} \u{2014} {}", e.title, e.subtitle),
+            popularity: e.popularity,
+        })
+        .collect();
+    let ranked = rank_candidates(query, &candidates, 5);
+    ranked
+        .into_iter()
+        .map(|(i, _)| entries[i].clone())
+        .collect()
+}
+
 fn perform_track_search(
     spotify: &AuthCodeSpotify,
     query: &str,
 ) -> Result<Vec<SearchResultEntry>, String> {
     let result = spotify
-        .search(query, SearchType::Track, None, None, Some(5), None)
+        .search(query, SearchType::Track, None, None, Some(10), None)
         .map_err(|e| format!("search failed: {e}"))?;
 
     let tracks = match result {
@@ -372,6 +424,7 @@ fn perform_track_search(
                 title: t.name,
                 subtitle: join_artist_names(&t.artists),
                 target: SearchPlayTarget::Track(id),
+                popularity: Some(t.popularity),
             })
         })
         .collect();
@@ -379,7 +432,7 @@ fn perform_track_search(
     if entries.is_empty() {
         Err(format!("no tracks for \"{query}\""))
     } else {
-        Ok(entries)
+        Ok(rank_search_entries(query, entries))
     }
 }
 
@@ -388,7 +441,7 @@ fn perform_album_search(
     query: &str,
 ) -> Result<Vec<SearchResultEntry>, String> {
     let result = spotify
-        .search(query, SearchType::Album, None, None, Some(5), None)
+        .search(query, SearchType::Album, None, None, Some(10), None)
         .map_err(|e| format!("search failed: {e}"))?;
 
     let albums = match result {
@@ -399,12 +452,14 @@ fn perform_album_search(
     let entries: Vec<SearchResultEntry> = albums
         .items
         .into_iter()
-        .filter_map(|a| {
+        .enumerate()
+        .filter_map(|(i, a)| {
             let id = a.id?;
             Some(SearchResultEntry {
                 title: a.name,
                 subtitle: join_artist_names(&a.artists),
                 target: SearchPlayTarget::Album(id),
+                popularity: Some(positional_popularity(i)),
             })
         })
         .collect();
@@ -412,7 +467,7 @@ fn perform_album_search(
     if entries.is_empty() {
         Err(format!("no albums for \"{query}\""))
     } else {
-        Ok(entries)
+        Ok(rank_search_entries(query, entries))
     }
 }
 
@@ -420,13 +475,14 @@ fn perform_playlist_search(
     spotify: &AuthCodeSpotify,
     query: &str,
 ) -> Result<Vec<SearchResultEntry>, String> {
-    let playlists = crate::client::search_playlists(spotify, query, 5)
+    let playlists = crate::client::search_playlists(spotify, query, 10)
         .map_err(|e| format!("search failed: {e}"))?;
 
     let entries: Vec<SearchResultEntry> = playlists
         .items
         .into_iter()
-        .map(|p| SearchResultEntry {
+        .enumerate()
+        .map(|(i, p)| SearchResultEntry {
             title: p.name,
             subtitle: format!(
                 "by {}",
@@ -435,17 +491,23 @@ fn perform_playlist_search(
                     .unwrap_or_else(|| "unknown".to_string())
             ),
             target: SearchPlayTarget::Playlist(p.id),
+            popularity: Some(positional_popularity(i)),
         })
         .collect();
 
     if entries.is_empty() {
         Err(format!("no playlists for \"{query}\""))
     } else {
-        Ok(entries)
+        Ok(rank_search_entries(query, entries))
     }
 }
 
-fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategory) {
+fn draw_search_input_bar(
+    frame: &mut Frame,
+    query: &str,
+    category: SearchCategory,
+    has_track: bool,
+) {
     let content = content_rect(frame.area());
     let hints_area = Rect {
         y: content.y + content.height.saturating_sub(1),
@@ -486,14 +548,17 @@ fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategor
     left.push(Span::styled("_", Style::new().fg(Color::DarkGray)));
     left_width += 2 + query.len() + 1;
 
-    let right_parts = vec![
-        Span::styled("Tab", key_style),
-        Span::styled(" type  ", desc_style),
-        Span::styled("Enter", key_style),
-        Span::styled(" search  ", desc_style),
-        Span::styled("Esc", key_style),
-        Span::styled(" cancel", desc_style),
-    ];
+    let mut right_parts = Vec::new();
+    if has_track && query.is_empty() {
+        right_parts.push(Span::styled(".", key_style));
+        right_parts.push(Span::styled(" artist  ", desc_style));
+    }
+    right_parts.push(Span::styled("Tab", key_style));
+    right_parts.push(Span::styled(" type  ", desc_style));
+    right_parts.push(Span::styled("Enter", key_style));
+    right_parts.push(Span::styled(" search  ", desc_style));
+    right_parts.push(Span::styled("Esc", key_style));
+    right_parts.push(Span::styled(" cancel", desc_style));
     let right_width: usize = right_parts.iter().map(|s| s.content.len()).sum();
 
     let padding = (hints_area.width as usize).saturating_sub(left_width + right_width);
@@ -654,10 +719,10 @@ fn build_hints_empty(width: u16) -> Line<'static> {
     }
 }
 
-fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
+fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool, has_track: bool) {
     match mode {
         PlayerMode::SearchInput { query, category } => {
-            draw_search_input_bar(frame, query, *category);
+            draw_search_input_bar(frame, query, *category, has_track);
         }
         PlayerMode::SearchLoading { .. } => {
             draw_search_loading_overlay(frame);
@@ -789,14 +854,17 @@ fn draw_help_overlay(frame: &mut Frame) {
     let bindings: &[(&str, &str)] = &[
         ("space", "Pause / resume"),
         ("n / p", "Next / previous track"),
-        ("← / →", "Seek backward / forward 5s"),
-        ("↑ / ↓", "Volume up / down"),
+        ("\u{2190} / \u{2192}", "Seek backward / forward 5s"),
+        ("\u{2191} / \u{2193}", "Volume up / down"),
         ("l", "Toggle lyrics"),
         ("j / k", "Scroll lyrics"),
         ("s", "Sync lyrics to playback"),
         ("q", "Toggle queue"),
         ("/", "Search tracks, albums, playlists"),
+        (".", "Insert current artist (in search)"),
+        ("\u{2191}/\u{2193}", "Browse search history (in search)"),
         ("a", "Queue track from search results"),
+        ("R", "Recent plays"),
         ("r", "Refresh now playing"),
         ("esc", "Quit"),
     ];
@@ -923,6 +991,11 @@ fn run_player_loop(
     // Search state
     let mut mode = PlayerMode::Normal;
     let mut search_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
+    let mut search_history = auth::load_search_history();
+    let mut history_cursor: Option<usize> = None;
+
+    // Recent plays
+    let mut recent_plays = auth::load_recent_plays();
 
     // Transient status message (auto-clears after 3 seconds)
     let mut status_message: Option<(String, Instant)> = None;
@@ -944,7 +1017,7 @@ fn run_player_loop(
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Collect deferred actions to avoid borrow conflicts with mode
                     let mut submit_search: Option<(String, SearchCategory)> = None;
-                    let mut play_target: Option<SearchPlayTarget> = None;
+                    let mut play_target: Option<SearchResultEntry> = None;
                     let mut queue_target: Option<SearchResultEntry> = None;
 
                     match &mut mode {
@@ -1112,6 +1185,33 @@ fn run_player_loop(
                             KeyCode::Char('r') => {
                                 last_fetch = Instant::now() - poll_interval;
                             }
+                            KeyCode::Char('R') => {
+                                let entries: Vec<SearchResultEntry> = recent_plays
+                                    .iter()
+                                    .filter_map(|rp| {
+                                        let target =
+                                            parse_target_uri(&rp.target_uri, &rp.target_type)?;
+                                        Some(SearchResultEntry {
+                                            title: rp.title.clone(),
+                                            subtitle: rp.subtitle.clone(),
+                                            target,
+                                            popularity: None,
+                                        })
+                                    })
+                                    .collect();
+                                if entries.is_empty() {
+                                    status_message =
+                                        Some(("no recent plays yet".to_string(), Instant::now()));
+                                } else {
+                                    mode = PlayerMode::SearchResults {
+                                        query: String::new(),
+                                        category: SearchCategory::Track,
+                                        results: entries,
+                                        selected: 0,
+                                    };
+                                }
+                                needs_redraw = true;
+                            }
                             KeyCode::Char('?') => {
                                 show_help = !show_help;
                                 needs_redraw = true;
@@ -1119,16 +1219,74 @@ fn run_player_loop(
                             _ => {}
                         },
                         PlayerMode::SearchInput { query, category } => match key.code {
+                            KeyCode::Char('.') if query.is_empty() => {
+                                if let Some(ref t) = info {
+                                    *query = t.artist.clone();
+                                    needs_redraw = true;
+                                }
+                            }
                             KeyCode::Char(c) => {
                                 query.push(c);
+                                history_cursor = None;
                                 needs_redraw = true;
                             }
                             KeyCode::Backspace => {
                                 query.pop();
+                                history_cursor = None;
                                 needs_redraw = true;
+                            }
+                            KeyCode::Up => {
+                                let cat_label = category.label();
+                                let matching: Vec<usize> = search_history
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, e)| e.category == cat_label)
+                                    .map(|(i, _)| i)
+                                    .collect();
+                                if !matching.is_empty() {
+                                    let pos = match history_cursor {
+                                        Some(cur) => {
+                                            let cur_match_pos = matching
+                                                .iter()
+                                                .position(|&i| i == cur)
+                                                .unwrap_or(0);
+                                            matching
+                                                .get(cur_match_pos + 1)
+                                                .copied()
+                                                .unwrap_or(matching[cur_match_pos])
+                                        }
+                                        None => matching[0],
+                                    };
+                                    *query = search_history[pos].query.clone();
+                                    history_cursor = Some(pos);
+                                    needs_redraw = true;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if let Some(cur) = history_cursor {
+                                    let cat_label = category.label();
+                                    let matching: Vec<usize> = search_history
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, e)| e.category == cat_label)
+                                        .map(|(i, _)| i)
+                                        .collect();
+                                    let cur_match_pos =
+                                        matching.iter().position(|&i| i == cur).unwrap_or(0);
+                                    if cur_match_pos == 0 {
+                                        query.clear();
+                                        history_cursor = None;
+                                    } else {
+                                        let pos = matching[cur_match_pos - 1];
+                                        *query = search_history[pos].query.clone();
+                                        history_cursor = Some(pos);
+                                    }
+                                    needs_redraw = true;
+                                }
                             }
                             KeyCode::Tab | KeyCode::BackTab => {
                                 *category = category.next();
+                                history_cursor = None;
                                 needs_redraw = true;
                             }
                             KeyCode::Enter => {
@@ -1138,6 +1296,7 @@ fn run_player_loop(
                             }
                             KeyCode::Esc => {
                                 mode = PlayerMode::Normal;
+                                history_cursor = None;
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -1161,12 +1320,12 @@ fn run_player_loop(
                                 needs_redraw = true;
                             }
                             KeyCode::Enter => {
-                                play_target = Some(results[*selected].target.clone());
+                                play_target = Some(results[*selected].clone());
                             }
                             KeyCode::Char(c @ '1'..='9') => {
                                 let idx = (c as usize) - ('1' as usize);
                                 if idx < results.len() {
-                                    play_target = Some(results[idx].target.clone());
+                                    play_target = Some(results[idx].clone());
                                 }
                             }
                             KeyCode::Char('a') => {
@@ -1182,6 +1341,10 @@ fn run_player_loop(
 
                     // Handle deferred search submission (avoids borrow conflict)
                     if let Some((q, cat)) = submit_search {
+                        auth::add_search_history(&mut search_history, &q, cat.label());
+                        let _ = auth::save_search_history(&search_history);
+                        history_cursor = None;
+
                         let sp = spotify.clone();
                         let (tx, rx) = mpsc::channel();
                         search_rx = Some(rx);
@@ -1197,22 +1360,22 @@ fn run_player_loop(
                     }
 
                     // Handle deferred play action (avoids borrow conflict)
-                    if let Some(target) = play_target {
-                        let result = match target {
+                    if let Some(entry) = play_target {
+                        let result = match &entry.target {
                             SearchPlayTarget::Track(id) => spotify.start_uris_playback(
-                                [PlayableId::Track(id)],
+                                [PlayableId::Track(id.clone())],
                                 None,
                                 None,
                                 None,
                             ),
                             SearchPlayTarget::Album(id) => spotify.start_context_playback(
-                                PlayContextId::Album(id),
+                                PlayContextId::Album(id.clone()),
                                 None,
                                 None,
                                 None,
                             ),
                             SearchPlayTarget::Playlist(id) => spotify.start_context_playback(
-                                PlayContextId::Playlist(id),
+                                PlayContextId::Playlist(id.clone()),
                                 None,
                                 None,
                                 None,
@@ -1226,6 +1389,14 @@ fn run_player_loop(
                                 ));
                             }
                             Ok(()) => {
+                                auth::add_recent_play(
+                                    &mut recent_plays,
+                                    &entry.title,
+                                    &entry.subtitle,
+                                    &entry.target_uri(),
+                                    entry.target_type(),
+                                );
+                                let _ = auth::save_recent_plays(&recent_plays);
                                 deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
                             }
                         }
@@ -1442,7 +1613,7 @@ fn run_player_loop(
                             effective_queue,
                             status_message.as_ref().map(|(msg, _)| msg.as_str()),
                         );
-                        draw_mode_overlays(frame, &mode, show_help);
+                        draw_mode_overlays(frame, &mode, show_help, true);
                     })?;
                     last_drawn = Some(state);
                 }
@@ -1451,7 +1622,7 @@ fn run_player_loop(
                 if needs_redraw || last_drawn.is_some() {
                     terminal.draw(|frame| {
                         draw_empty(frame, status_message.as_ref().map(|(msg, _)| msg.as_str()));
-                        draw_mode_overlays(frame, &mode, show_help);
+                        draw_mode_overlays(frame, &mode, show_help, false);
                     })?;
                     last_drawn = None;
                 }
