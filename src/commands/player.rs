@@ -55,6 +55,7 @@ enum SearchPlayTarget {
     Playlist(PlaylistId<'static>),
 }
 
+#[derive(Clone)]
 struct SearchResultEntry {
     title: String,
     subtitle: String,
@@ -559,6 +560,24 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
         ]);
         frame.render_widget(Paragraph::new(line), row);
     }
+
+    let hints_y = content.y + content.height.saturating_sub(1);
+    let hints_row = Rect {
+        y: hints_y,
+        height: 1,
+        ..content
+    };
+    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
+    let hints = Line::from(vec![
+        Span::styled("Enter", key_style),
+        Span::styled(" play  ", desc_style),
+        Span::styled("a", key_style),
+        Span::styled(" queue  ", desc_style),
+        Span::styled("Esc", key_style),
+        Span::styled(" cancel", desc_style),
+    ]);
+    frame.render_widget(Paragraph::new(hints), hints_row);
 }
 
 fn draw_empty(frame: &mut Frame, status_message: Option<&str>) {
@@ -777,6 +796,7 @@ fn draw_help_overlay(frame: &mut Frame) {
         ("s", "Sync lyrics to playback"),
         ("q", "Toggle queue"),
         ("/", "Search tracks, albums, playlists"),
+        ("a", "Queue track from search results"),
         ("r", "Refresh now playing"),
         ("esc", "Quit"),
     ];
@@ -925,6 +945,7 @@ fn run_player_loop(
                     // Collect deferred actions to avoid borrow conflicts with mode
                     let mut submit_search: Option<(String, SearchCategory)> = None;
                     let mut play_target: Option<SearchPlayTarget> = None;
+                    let mut queue_target: Option<SearchResultEntry> = None;
 
                     match &mut mode {
                         PlayerMode::Normal => match key.code {
@@ -1148,6 +1169,9 @@ fn run_player_loop(
                                     play_target = Some(results[idx].target.clone());
                                 }
                             }
+                            KeyCode::Char('a') => {
+                                queue_target = Some(results[*selected].clone());
+                            }
                             KeyCode::Esc => {
                                 mode = PlayerMode::Normal;
                                 needs_redraw = true;
@@ -1203,6 +1227,39 @@ fn run_player_loop(
                             }
                             Ok(()) => {
                                 deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
+                            }
+                        }
+                        mode = PlayerMode::Normal;
+                        needs_redraw = true;
+                    }
+
+                    if let Some(entry) = queue_target {
+                        match entry.target {
+                            SearchPlayTarget::Track(id) => {
+                                let playable = PlayableId::Track(id);
+                                match spotify.add_item_to_queue(playable, None) {
+                                    Ok(()) => {
+                                        status_message = Some((
+                                            format!(
+                                                "Queued: {} \u{2014} {}",
+                                                entry.title, entry.subtitle
+                                            ),
+                                            Instant::now(),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        status_message = Some((
+                                            format!("{}", api_error(e, "add to queue")),
+                                            Instant::now(),
+                                        ));
+                                    }
+                                }
+                            }
+                            SearchPlayTarget::Album(_) | SearchPlayTarget::Playlist(_) => {
+                                status_message = Some((
+                                    "Only tracks can be added to queue".to_string(),
+                                    Instant::now(),
+                                ));
                             }
                         }
                         mode = PlayerMode::Normal;
