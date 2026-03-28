@@ -118,7 +118,23 @@ pub fn load_config() -> Result<Config> {
     })
 }
 
-// --- Search history persistence ---
+fn load_json_list<T: serde::de::DeserializeOwned>(filename: &str) -> Vec<T> {
+    let path = match config_dir() {
+        Ok(d) => d.join(filename),
+        Err(_) => return Vec::new(),
+    };
+    let contents = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+fn save_json_list<T: serde::Serialize>(filename: &str, entries: &[T]) -> Result<()> {
+    let path = config_dir()?.join(filename);
+    let json = serde_json::to_string(entries).context("could not serialize data")?;
+    write_secure_file(&path, json.as_bytes())
+}
 
 const MAX_SEARCH_HISTORY: usize = 50;
 
@@ -129,21 +145,11 @@ pub struct SearchHistoryEntry {
 }
 
 pub fn load_search_history() -> Vec<SearchHistoryEntry> {
-    let path = match config_dir() {
-        Ok(d) => d.join("search_history.json"),
-        Err(_) => return Vec::new(),
-    };
-    let contents = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    serde_json::from_str(&contents).unwrap_or_default()
+    load_json_list("search_history.json")
 }
 
 pub fn save_search_history(entries: &[SearchHistoryEntry]) -> Result<()> {
-    let path = config_dir()?.join("search_history.json");
-    let json = serde_json::to_string(entries).context("could not serialize search history")?;
-    write_secure_file(&path, json.as_bytes())
+    save_json_list("search_history.json", entries)
 }
 
 pub fn add_search_history(history: &mut Vec<SearchHistoryEntry>, query: &str, category: &str) {
@@ -158,8 +164,6 @@ pub fn add_search_history(history: &mut Vec<SearchHistoryEntry>, query: &str, ca
     history.truncate(MAX_SEARCH_HISTORY);
 }
 
-// --- Recent plays persistence ---
-
 const MAX_RECENT_PLAYS: usize = 10;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -171,39 +175,15 @@ pub struct RecentPlayEntry {
 }
 
 pub fn load_recent_plays() -> Vec<RecentPlayEntry> {
-    let path = match config_dir() {
-        Ok(d) => d.join("recent_plays.json"),
-        Err(_) => return Vec::new(),
-    };
-    let contents = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    serde_json::from_str(&contents).unwrap_or_default()
+    load_json_list("recent_plays.json")
 }
 
 pub fn save_recent_plays(entries: &[RecentPlayEntry]) -> Result<()> {
-    let path = config_dir()?.join("recent_plays.json");
-    let json = serde_json::to_string(entries).context("could not serialize recent plays")?;
-    write_secure_file(&path, json.as_bytes())
+    save_json_list("recent_plays.json", entries)
 }
 
-pub fn add_recent_play(
-    recents: &mut Vec<RecentPlayEntry>,
-    title: &str,
-    subtitle: &str,
-    target_uri: &str,
-    target_type: &str,
-) {
-    recents.retain(|e| e.target_uri != target_uri);
-    recents.insert(
-        0,
-        RecentPlayEntry {
-            title: title.to_string(),
-            subtitle: subtitle.to_string(),
-            target_uri: target_uri.to_string(),
-            target_type: target_type.to_string(),
-        },
-    );
+pub fn add_recent_play(recents: &mut Vec<RecentPlayEntry>, entry: RecentPlayEntry) {
+    recents.retain(|e| e.target_uri != entry.target_uri);
+    recents.insert(0, entry);
     recents.truncate(MAX_RECENT_PLAYS);
 }

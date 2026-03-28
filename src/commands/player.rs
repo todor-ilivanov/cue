@@ -963,6 +963,18 @@ pub fn player(spotify: &AuthCodeSpotify, slim: bool) -> Result<()> {
     result
 }
 
+fn history_indices_for_category(
+    history: &[auth::SearchHistoryEntry],
+    category: &str,
+) -> Vec<usize> {
+    history
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.category == category)
+        .map(|(i, _)| i)
+        .collect()
+}
+
 fn run_player_loop(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     spotify: &AuthCodeSpotify,
@@ -1236,13 +1248,8 @@ fn run_player_loop(
                                 needs_redraw = true;
                             }
                             KeyCode::Up => {
-                                let cat_label = category.label();
-                                let matching: Vec<usize> = search_history
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, e)| e.category == cat_label)
-                                    .map(|(i, _)| i)
-                                    .collect();
+                                let matching =
+                                    history_indices_for_category(&search_history, category.label());
                                 if !matching.is_empty() {
                                     let pos = match history_cursor {
                                         Some(cur) => {
@@ -1264,13 +1271,10 @@ fn run_player_loop(
                             }
                             KeyCode::Down => {
                                 if let Some(cur) = history_cursor {
-                                    let cat_label = category.label();
-                                    let matching: Vec<usize> = search_history
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, e)| e.category == cat_label)
-                                        .map(|(i, _)| i)
-                                        .collect();
+                                    let matching = history_indices_for_category(
+                                        &search_history,
+                                        category.label(),
+                                    );
                                     let cur_match_pos =
                                         matching.iter().position(|&i| i == cur).unwrap_or(0);
                                     if cur_match_pos == 0 {
@@ -1391,10 +1395,12 @@ fn run_player_loop(
                             Ok(()) => {
                                 auth::add_recent_play(
                                     &mut recent_plays,
-                                    &entry.title,
-                                    &entry.subtitle,
-                                    &entry.target_uri(),
-                                    entry.target_type(),
+                                    auth::RecentPlayEntry {
+                                        title: entry.title.clone(),
+                                        subtitle: entry.subtitle.clone(),
+                                        target_uri: entry.target_uri(),
+                                        target_type: entry.target_type().to_string(),
+                                    },
                                 );
                                 let _ = auth::save_recent_plays(&recent_plays);
                                 deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
