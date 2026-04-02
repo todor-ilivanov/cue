@@ -128,6 +128,60 @@ pub fn search_playlists(
     serde_json::from_value(json["playlists"].take()).context("failed to parse playlist results")
 }
 
+pub struct RecommendedTrack {
+    pub id: String,
+}
+
+pub fn fetch_recommendations(
+    spotify: &AuthCodeSpotify,
+    track_id: &str,
+    artist_id: Option<&str>,
+    limit: u32,
+) -> Result<Vec<RecommendedTrack>> {
+    let access_token = {
+        let guard = spotify
+            .token
+            .lock()
+            .map_err(|_| anyhow!("token lock failed"))?;
+        guard
+            .as_ref()
+            .context("no token available")?
+            .access_token
+            .clone()
+    };
+
+    let mut req = ureq::get("https://api.spotify.com/v1/recommendations")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .query("seed_tracks", track_id)
+        .query("limit", &limit.to_string());
+
+    if let Some(aid) = artist_id {
+        req = req.query("seed_artists", aid);
+    }
+
+    let resp = req.call().context("failed to fetch recommendations")?;
+
+    let body = resp
+        .into_string()
+        .context("failed to read recommendations response")?;
+    let json: serde_json::Value =
+        serde_json::from_str(&body).context("failed to parse recommendations response")?;
+
+    let tracks = json["tracks"]
+        .as_array()
+        .context("recommendations response missing tracks array")?;
+
+    let results: Vec<RecommendedTrack> = tracks
+        .iter()
+        .filter_map(|item| {
+            let id = item["id"].as_str()?.to_string();
+            Some(RecommendedTrack { id })
+        })
+        .collect();
+
+    Ok(results)
+}
+
 fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
     let listener = TcpListener::bind("127.0.0.1:8888")
         .context("could not listen on 127.0.0.1:8888 for OAuth callback")?;
