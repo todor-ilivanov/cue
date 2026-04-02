@@ -959,7 +959,13 @@ fn run_player_loop(
                     let mut submit_search: Option<(String, SearchCategory)> = None;
                     let mut play_target: Option<SearchPlayTarget> = None;
                     let mut queue_target: Option<SearchResultEntry> = None;
-                    let mut start_radio: Option<(Option<String>, Option<String>)> = None;
+                    #[allow(clippy::type_complexity)]
+                    let mut start_radio: Option<(
+                        Option<String>,
+                        Option<String>,
+                        String,
+                        String,
+                    )> = None;
 
                     match &mut mode {
                         PlayerMode::Normal => match key.code {
@@ -1140,7 +1146,12 @@ fn run_player_loop(
                             }
                             KeyCode::Char('R') => {
                                 if let Some(ref t) = info {
-                                    start_radio = Some((t.track_id.clone(), t.artist_id.clone()));
+                                    start_radio = Some((
+                                        t.track_id.clone(),
+                                        t.artist_id.clone(),
+                                        t.title.clone(),
+                                        t.artist.clone(),
+                                    ));
                                 } else {
                                     status_message = Some((
                                         "no track is currently playing".to_string(),
@@ -1308,7 +1319,7 @@ fn run_player_loop(
                         needs_redraw = true;
                     }
 
-                    if let Some((tid, aid)) = start_radio {
+                    if let Some((tid, aid, title, artist)) = start_radio {
                         match tid {
                             Some(track_id) => {
                                 match crate::client::fetch_recommendations(
@@ -1337,7 +1348,12 @@ fn run_player_loop(
                                         match spotify.start_uris_playback(uris, None, None, None) {
                                             Ok(()) => {
                                                 status_message = Some((
-                                                    format!("Radio: {} tracks queued", recs.len()),
+                                                    format!(
+                                                        "Radio: {} tracks queued for {} \u{2014} {}",
+                                                        recs.len(),
+                                                        title,
+                                                        artist
+                                                    ),
                                                     Instant::now(),
                                                     Color::Green,
                                                 ));
