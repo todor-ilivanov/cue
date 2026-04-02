@@ -216,7 +216,7 @@ fn draw_playing(
     show_lyrics: bool,
     lyrics_scroll_center: Option<usize>,
     queue_context: Option<&QueueContext>,
-    status_message: Option<&str>,
+    status_message: Option<(&str, Color)>,
 ) {
     let content_area = content_rect(frame.area());
     let height = content_area.height;
@@ -328,8 +328,8 @@ fn draw_playing(
     }
 
     // Status message (transient, in blank line above hints)
-    if let Some(msg) = status_message {
-        let status_line = Line::from(Span::styled(msg, Style::new().fg(Color::Red)));
+    if let Some((msg, color)) = status_message {
+        let status_line = Line::from(Span::styled(msg, Style::new().fg(color)));
         frame.render_widget(Paragraph::new(status_line), rows[lyrics_row + 1]);
     }
 
@@ -580,7 +580,7 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
     frame.render_widget(Paragraph::new(hints), hints_row);
 }
 
-fn draw_empty(frame: &mut Frame, status_message: Option<&str>) {
+fn draw_empty(frame: &mut Frame, status_message: Option<(&str, Color)>) {
     let content = content_rect(frame.area());
 
     let rows = Layout::vertical([
@@ -613,8 +613,8 @@ fn draw_empty(frame: &mut Frame, status_message: Option<&str>) {
         rows[2],
     );
 
-    if let Some(msg) = status_message {
-        let status = Line::from(Span::styled(msg, Style::new().fg(Color::Red)));
+    if let Some((msg, color)) = status_message {
+        let status = Line::from(Span::styled(msg, Style::new().fg(color)));
         frame.render_widget(
             Paragraph::new(status).alignment(ratatui::layout::Alignment::Center),
             rows[3],
@@ -925,13 +925,13 @@ fn run_player_loop(
     let mut search_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
 
     // Transient status message (auto-clears after 3 seconds)
-    let mut status_message: Option<(String, Instant)> = None;
+    let mut status_message: Option<(String, Instant, Color)> = None;
 
     loop {
         let mut needs_redraw = false;
 
         // Clear expired status message
-        if let Some((_, when)) = &status_message {
+        if let Some((_, when, _)) = &status_message {
             if when.elapsed() > Duration::from_secs(3) {
                 status_message = None;
                 needs_redraw = true;
@@ -973,13 +973,17 @@ fn run_player_loop(
                                             status_message = Some((
                                                 format!("pause failed: {e}"),
                                                 Instant::now(),
+                                                Color::Red,
                                             ));
                                         } else {
                                             t.is_playing = false;
                                         }
                                     } else if let Err(e) = spotify.resume_playback(None, None) {
-                                        status_message =
-                                            Some((format!("resume failed: {e}"), Instant::now()));
+                                        status_message = Some((
+                                            format!("resume failed: {e}"),
+                                            Instant::now(),
+                                            Color::Red,
+                                        ));
                                     } else {
                                         t.is_playing = true;
                                     }
@@ -991,6 +995,7 @@ fn run_player_loop(
                                             status_message = Some((
                                                 format!("resume failed: {e}"),
                                                 Instant::now(),
+                                                Color::Red,
                                             ));
                                         }
                                         Ok(()) => {
@@ -1013,8 +1018,11 @@ fn run_player_loop(
                                     } else {
                                         "prev"
                                     };
-                                    status_message =
-                                        Some((format!("{action} failed: {e}"), Instant::now()));
+                                    status_message = Some((
+                                        format!("{action} failed: {e}"),
+                                        Instant::now(),
+                                        Color::Red,
+                                    ));
                                 } else {
                                     deferred_fetch =
                                         Some(Instant::now() + Duration::from_millis(800));
@@ -1033,8 +1041,11 @@ fn run_player_loop(
                                         (current_ms + delta_ms).clamp(0, t.duration_secs * 1000);
                                     let pos = chrono::Duration::milliseconds(new_ms);
                                     if let Err(e) = spotify.seek_track(pos, None) {
-                                        status_message =
-                                            Some((format!("seek failed: {e}"), Instant::now()));
+                                        status_message = Some((
+                                            format!("seek failed: {e}"),
+                                            Instant::now(),
+                                            Color::Red,
+                                        ));
                                     } else {
                                         t.progress_ms = new_ms;
                                         fetch_anchor = Instant::now();
@@ -1053,6 +1064,7 @@ fn run_player_loop(
                                             status_message = Some((
                                                 format!("volume failed: {e}"),
                                                 Instant::now(),
+                                                Color::Red,
                                             ));
                                         } else {
                                             t.volume_percent = Some(new_vol as u32);
@@ -1223,6 +1235,7 @@ fn run_player_loop(
                                 status_message = Some((
                                     format!("{}", api_error(e, "start playback")),
                                     Instant::now(),
+                                    Color::Red,
                                 ));
                             }
                             Ok(()) => {
@@ -1245,12 +1258,14 @@ fn run_player_loop(
                                                 entry.title, entry.subtitle
                                             ),
                                             Instant::now(),
+                                            Color::Green,
                                         ));
                                     }
                                     Err(e) => {
                                         status_message = Some((
                                             format!("{}", api_error(e, "add to queue")),
                                             Instant::now(),
+                                            Color::Red,
                                         ));
                                     }
                                 }
@@ -1259,6 +1274,7 @@ fn run_player_loop(
                                 status_message = Some((
                                     "Only tracks can be added to queue".to_string(),
                                     Instant::now(),
+                                    Color::Red,
                                 ));
                             }
                         }
@@ -1369,7 +1385,7 @@ fn run_player_loop(
                 }
                 Ok(Err(msg)) => {
                     search_rx = None;
-                    status_message = Some((msg, Instant::now()));
+                    status_message = Some((msg, Instant::now(), Color::Red));
                     if let PlayerMode::SearchLoading { query, category } = &mode {
                         mode = PlayerMode::SearchInput {
                             query: query.clone(),
@@ -1380,7 +1396,8 @@ fn run_player_loop(
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     search_rx = None;
-                    status_message = Some(("search failed".to_string(), Instant::now()));
+                    status_message =
+                        Some(("search failed".to_string(), Instant::now(), Color::Red));
                     mode = PlayerMode::Normal;
                     needs_redraw = true;
                 }
@@ -1440,7 +1457,9 @@ fn run_player_loop(
                             effective_lyrics,
                             lyrics_scroll_center,
                             effective_queue,
-                            status_message.as_ref().map(|(msg, _)| msg.as_str()),
+                            status_message
+                                .as_ref()
+                                .map(|(msg, _, color)| (msg.as_str(), *color)),
                         );
                         draw_mode_overlays(frame, &mode, show_help);
                     })?;
@@ -1450,7 +1469,12 @@ fn run_player_loop(
             None => {
                 if needs_redraw || last_drawn.is_some() {
                     terminal.draw(|frame| {
-                        draw_empty(frame, status_message.as_ref().map(|(msg, _)| msg.as_str()));
+                        draw_empty(
+                            frame,
+                            status_message
+                                .as_ref()
+                                .map(|(msg, _, color)| (msg.as_str(), *color)),
+                        );
                         draw_mode_overlays(frame, &mode, show_help);
                     })?;
                     last_drawn = None;
