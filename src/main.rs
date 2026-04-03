@@ -94,6 +94,8 @@ Examples:
         #[arg(allow_hyphen_values = true)]
         level: Option<String>,
     },
+    /// Start a radio based on the currently playing track
+    Radio,
     /// Show the queue or add a track to it
     #[command(after_help = "\
 Examples:
@@ -166,6 +168,7 @@ fn main() -> Result<()> {
             commands::devices::transfer(&spotify, name.as_deref())?;
         }
         Command::Volume { level } => commands::volume::volume(&spotify, level.as_deref())?,
+        Command::Radio => commands::radio::radio(&spotify)?,
         Command::Queue { query, pick } => {
             let query = query.join(" ");
             if query.is_empty() {
