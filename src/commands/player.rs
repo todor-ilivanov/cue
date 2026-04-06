@@ -1046,6 +1046,7 @@ fn run_player_loop(
                                 } else {
                                     deferred_fetch =
                                         Some(Instant::now() + Duration::from_millis(800));
+                                    queue_context = None;
                                 }
                                 needs_redraw = true;
                             }
@@ -1277,6 +1278,7 @@ fn run_player_loop(
                             }
                             Ok(()) => {
                                 deferred_fetch = Some(Instant::now() + Duration::from_millis(800));
+                                queue_context = None;
                             }
                         }
                         mode = PlayerMode::Normal;
@@ -1297,6 +1299,7 @@ fn run_player_loop(
                                             Instant::now(),
                                             Color::Green,
                                         ));
+                                        queue_context = None;
                                     }
                                     Err(e) => {
                                         status_message = Some((
@@ -1357,6 +1360,7 @@ fn run_player_loop(
                                                 deferred_fetch = Some(
                                                     Instant::now() + Duration::from_millis(800),
                                                 );
+                                                queue_context = None;
                                             }
                                             Err(e) => {
                                                 status_message = Some((
