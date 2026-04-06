@@ -136,9 +136,7 @@ pub struct RadioTrack {
     pub id: String,
 }
 
-fn fetch_related_artists(spotify: &AuthCodeSpotify, artist_id: &str) -> Result<Vec<String>> {
-    let access_token = get_access_token(spotify)?;
-
+fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<String>> {
     let resp = ureq::get(&format!(
         "https://api.spotify.com/v1/artists/{artist_id}/related-artists"
     ))
@@ -162,9 +160,7 @@ fn fetch_related_artists(spotify: &AuthCodeSpotify, artist_id: &str) -> Result<V
         .collect())
 }
 
-fn fetch_artist_top_tracks(spotify: &AuthCodeSpotify, artist_id: &str) -> Result<Vec<RadioTrack>> {
-    let access_token = get_access_token(spotify)?;
-
+fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<RadioTrack>> {
     let resp = ureq::get(&format!(
         "https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
     ))
@@ -200,7 +196,8 @@ pub fn fetch_radio_tracks(
     exclude_track_id: &str,
     limit: usize,
 ) -> Result<Vec<RadioTrack>> {
-    let related = fetch_related_artists(spotify, artist_id)?;
+    let access_token = get_access_token(spotify)?;
+    let related = fetch_related_artists(&access_token, artist_id)?;
 
     // Seed artist + up to 7 related artists = up to 80 candidate tracks
     let mut artist_ids: Vec<String> = vec![artist_id.to_string()];
@@ -208,7 +205,7 @@ pub fn fetch_radio_tracks(
 
     let mut buckets: Vec<Vec<RadioTrack>> = Vec::new();
     for aid in &artist_ids {
-        if let Ok(tracks) = fetch_artist_top_tracks(spotify, aid) {
+        if let Ok(tracks) = fetch_artist_top_tracks(&access_token, aid) {
             if !tracks.is_empty() {
                 buckets.push(tracks);
             }
@@ -224,7 +221,8 @@ pub fn fetch_radio_tracks(
     for i in 0..max_len {
         for bucket in &buckets {
             if let Some(track) = bucket.get(i) {
-                if seen.insert(track.id.clone()) {
+                if !seen.contains(&track.id) {
+                    seen.insert(track.id.clone());
                     result.push(RadioTrack {
                         id: track.id.clone(),
                     });
