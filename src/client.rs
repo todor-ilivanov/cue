@@ -132,6 +132,18 @@ pub fn search_playlists(
     serde_json::from_value(json["playlists"].take()).context("failed to parse playlist results")
 }
 
+fn join_artist_names_json(value: &serde_json::Value) -> String {
+    value["artists"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
 /// A track within an album or playlist context.
 pub struct ContextTrack {
     pub id: String,
@@ -178,15 +190,7 @@ pub fn fetch_album_tracks(spotify: &AuthCodeSpotify, album_id: &str) -> Result<V
             };
             let uri = t["uri"].as_str().unwrap_or_default().to_string();
             let name = t["name"].as_str().unwrap_or_default().to_string();
-            let artists = t["artists"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a["name"].as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let artists = join_artist_names_json(t);
             tracks.push(ContextTrack {
                 id,
                 uri,
@@ -205,7 +209,7 @@ pub fn fetch_album_tracks(spotify: &AuthCodeSpotify, album_id: &str) -> Result<V
     Ok(tracks)
 }
 
-/// Fetch tracks from a playlist (first 100).
+/// Fetch tracks from a playlist (up to 500).
 pub fn fetch_playlist_tracks(
     spotify: &AuthCodeSpotify,
     playlist_id: &str,
@@ -251,15 +255,7 @@ pub fn fetch_playlist_tracks(
             };
             let uri = t["uri"].as_str().unwrap_or_default().to_string();
             let name = t["name"].as_str().unwrap_or_default().to_string();
-            let artists = t["artists"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a["name"].as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let artists = join_artist_names_json(t);
             tracks.push(ContextTrack {
                 id,
                 uri,
@@ -270,7 +266,7 @@ pub fn fetch_playlist_tracks(
 
         let total = json["total"].as_u64().unwrap_or(0) as u32;
         offset += limit;
-        if offset >= total {
+        if offset >= total || tracks.len() >= 500 {
             break;
         }
     }
@@ -337,15 +333,7 @@ fn fetch_artist_top_tracks_raw(access_token: &str, artist_id: &str) -> Result<Ve
         .filter_map(|t| {
             let id = t["id"].as_str()?.to_string();
             let name = t["name"].as_str()?.to_string();
-            let artists = t["artists"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a["name"].as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let artists = join_artist_names_json(t);
             Some(ArtistTopTrack { id, name, artists })
         })
         .collect())

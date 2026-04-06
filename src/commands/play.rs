@@ -7,7 +7,20 @@ use std::thread;
 use std::time::Duration;
 
 use super::{api_error, join_artist_names};
+use crate::client::ContextTrack;
 use crate::ui;
+
+fn context_track_candidates(tracks: &[ContextTrack]) -> Vec<ui::PickCandidate> {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| ui::PickCandidate {
+            name: t.name.clone(),
+            label: format!("{}. {} — {}", i + 1, t.name, t.artists),
+            popularity: Some(super::positional_popularity(i)),
+        })
+        .collect()
+}
 
 pub fn play(
     spotify: &AuthCodeSpotify,
@@ -134,15 +147,7 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
         bail!("album has no tracks");
     }
 
-    let track_candidates: Vec<ui::PickCandidate> = tracks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| ui::PickCandidate {
-            name: t.name.clone(),
-            label: format!("{}. {} — {}", i + 1, t.name, t.artists),
-            popularity: Some(super::positional_popularity(i)),
-        })
-        .collect();
+    let track_candidates = context_track_candidates(&tracks);
 
     let track_pick = ui::pick_result(&album_name, track_candidates, "Start playing from", true)?;
 
@@ -201,15 +206,7 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
         bail!("playlist has no tracks");
     }
 
-    let track_candidates: Vec<ui::PickCandidate> = tracks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| ui::PickCandidate {
-            name: t.name.clone(),
-            label: format!("{}. {} — {}", i + 1, t.name, t.artists),
-            popularity: Some(super::positional_popularity(i)),
-        })
-        .collect();
+    let track_candidates = context_track_candidates(&tracks);
 
     let track_pick = ui::pick_result(&playlist_name, track_candidates, "Start playing from", true)?;
 
