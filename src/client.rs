@@ -1,11 +1,13 @@
+use std::collections::HashSet;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+
 use anyhow::{anyhow, bail, Context, Result};
 use rspotify::{
     model::{Page, SimplifiedPlaylist},
     prelude::{BaseClient, OAuthClient},
     scopes, AuthCodeSpotify, Credentials, OAuth,
 };
-use std::io::{Read, Write};
-use std::net::TcpListener;
 
 use crate::auth::{self, Config};
 
@@ -86,6 +88,18 @@ pub fn persist_token(spotify: &AuthCodeSpotify) -> Result<()> {
     Ok(())
 }
 
+fn get_access_token(spotify: &AuthCodeSpotify) -> Result<String> {
+    let guard = spotify
+        .token
+        .lock()
+        .map_err(|_| anyhow!("token lock failed"))?;
+    Ok(guard
+        .as_ref()
+        .context("no token available")?
+        .access_token
+        .clone())
+}
+
 /// Search for playlists, filtering out null items that Spotify sometimes
 /// returns for unavailable playlists (which cause rspotify parse errors).
 pub fn search_playlists(
@@ -93,17 +107,7 @@ pub fn search_playlists(
     query: &str,
     limit: u32,
 ) -> Result<Page<SimplifiedPlaylist>> {
-    let access_token = {
-        let guard = spotify
-            .token
-            .lock()
-            .map_err(|_| anyhow!("token lock failed"))?;
-        guard
-            .as_ref()
-            .context("no token available")?
-            .access_token
-            .clone()
-    };
+    let access_token = get_access_token(spotify)?;
 
     let resp = ureq::get("https://api.spotify.com/v1/search")
         .set("Authorization", &format!("Bearer {access_token}"))
@@ -128,58 +132,109 @@ pub fn search_playlists(
     serde_json::from_value(json["playlists"].take()).context("failed to parse playlist results")
 }
 
-pub struct RecommendedTrack {
+pub struct RadioTrack {
     pub id: String,
 }
 
-pub fn fetch_recommendations(
-    spotify: &AuthCodeSpotify,
-    track_id: &str,
-    artist_id: Option<&str>,
-    limit: u32,
-) -> Result<Vec<RecommendedTrack>> {
-    let access_token = {
-        let guard = spotify
-            .token
-            .lock()
-            .map_err(|_| anyhow!("token lock failed"))?;
-        guard
-            .as_ref()
-            .context("no token available")?
-            .access_token
-            .clone()
-    };
-
-    let mut req = ureq::get("https://api.spotify.com/v1/recommendations")
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .query("seed_tracks", track_id)
-        .query("limit", &limit.to_string());
-
-    if let Some(aid) = artist_id {
-        req = req.query("seed_artists", aid);
-    }
-
-    let resp = req.call().context("failed to fetch recommendations")?;
+fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<String>> {
+    let resp = ureq::get(&format!(
+        "https://api.spotify.com/v1/artists/{artist_id}/related-artists"
+    ))
+    .set("Authorization", &format!("Bearer {access_token}"))
+    .call()
+    .context("failed to fetch related artists")?;
 
     let body = resp
         .into_string()
-        .context("failed to read recommendations response")?;
+        .context("failed to read related artists response")?;
     let json: serde_json::Value =
-        serde_json::from_str(&body).context("failed to parse recommendations response")?;
+        serde_json::from_str(&body).context("failed to parse related artists response")?;
+
+    let artists = json["artists"]
+        .as_array()
+        .context("related artists response missing artists array")?;
+
+    Ok(artists
+        .iter()
+        .filter_map(|a| a["id"].as_str().map(String::from))
+        .collect())
+}
+
+fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<RadioTrack>> {
+    let resp = ureq::get(&format!(
+        "https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
+    ))
+    .set("Authorization", &format!("Bearer {access_token}"))
+    .query("market", "US")
+    .call()
+    .context("failed to fetch artist top tracks")?;
+
+    let body = resp
+        .into_string()
+        .context("failed to read top tracks response")?;
+    let json: serde_json::Value =
+        serde_json::from_str(&body).context("failed to parse top tracks response")?;
 
     let tracks = json["tracks"]
         .as_array()
-        .context("recommendations response missing tracks array")?;
+        .context("top tracks response missing tracks array")?;
 
-    let results: Vec<RecommendedTrack> = tracks
+    Ok(tracks
         .iter()
-        .filter_map(|item| {
-            let id = item["id"].as_str()?.to_string();
-            Some(RecommendedTrack { id })
+        .filter_map(|t| {
+            let id = t["id"].as_str()?.to_string();
+            Some(RadioTrack { id })
         })
-        .collect();
+        .collect())
+}
 
-    Ok(results)
+/// Build a radio-style track list from related artists' top tracks.
+/// Returns track IDs interleaved across artists for variety.
+pub fn fetch_radio_tracks(
+    spotify: &AuthCodeSpotify,
+    artist_id: &str,
+    exclude_track_id: &str,
+    limit: usize,
+) -> Result<Vec<RadioTrack>> {
+    let access_token = get_access_token(spotify)?;
+    let related = fetch_related_artists(&access_token, artist_id)?;
+
+    // Seed artist + up to 7 related artists = up to 80 candidate tracks
+    let mut artist_ids: Vec<String> = vec![artist_id.to_string()];
+    artist_ids.extend(related.into_iter().take(7));
+
+    let mut buckets: Vec<Vec<RadioTrack>> = Vec::new();
+    for aid in &artist_ids {
+        if let Ok(tracks) = fetch_artist_top_tracks(&access_token, aid) {
+            if !tracks.is_empty() {
+                buckets.push(tracks);
+            }
+        }
+    }
+
+    // Round-robin interleave for artist diversity
+    let mut result: Vec<RadioTrack> = Vec::new();
+    let mut seen = HashSet::new();
+    seen.insert(exclude_track_id.to_string());
+
+    let max_len = buckets.iter().map(|b| b.len()).max().unwrap_or(0);
+    for i in 0..max_len {
+        for bucket in &buckets {
+            if let Some(track) = bucket.get(i) {
+                if !seen.contains(&track.id) {
+                    seen.insert(track.id.clone());
+                    result.push(RadioTrack {
+                        id: track.id.clone(),
+                    });
+                }
+                if result.len() >= limit {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
