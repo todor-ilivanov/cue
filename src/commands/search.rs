@@ -59,8 +59,10 @@ pub fn now(spotify: &AuthCodeSpotify) -> Result<()> {
     Ok(())
 }
 
-pub fn search(spotify: &AuthCodeSpotify, query: &str, album: bool) -> Result<()> {
-    if album {
+pub fn search(spotify: &AuthCodeSpotify, query: &str, album: bool, artist: bool) -> Result<()> {
+    if artist {
+        search_artists(spotify, query)
+    } else if album {
         search_albums(spotify, query)
     } else {
         search_tracks(spotify, query)
@@ -130,6 +132,73 @@ fn search_tracks(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
                 track.name,
                 artists
             );
+        }
+    }
+
+    Ok(())
+}
+
+fn search_artists(spotify: &AuthCodeSpotify, query: &str) -> Result<()> {
+    let result = ui::with_spinner("Searching...", || {
+        spotify
+            .search(
+                query,
+                rspotify::model::SearchType::Artist,
+                None,
+                None,
+                Some(10),
+                None,
+            )
+            .context("failed to search for artists")
+    })?;
+
+    let artists = match result {
+        SearchResult::Artists(page) => page,
+        _ => bail!("unexpected search result type"),
+    };
+
+    if artists.items.is_empty() {
+        bail!("no results for \"{query}\"");
+    }
+
+    let candidates: Vec<ui::PickCandidate> = artists
+        .items
+        .iter()
+        .map(|a| ui::PickCandidate {
+            name: a.name.clone(),
+            label: a.name.clone(),
+            popularity: Some(a.popularity),
+        })
+        .collect();
+
+    let ranked = ui::rank_candidates(query, &candidates, 5);
+
+    for (display_idx, &(orig_idx, _)) in ranked.iter().enumerate() {
+        let artist = &artists.items[orig_idx];
+        let genres = if artist.genres.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                artist
+                    .genres
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        if ui::is_interactive() {
+            println!(
+                "  {}. {}{}",
+                display_idx + 1,
+                console::style(&artist.name).bold(),
+                console::style(&genres).dim()
+            );
+        } else {
+            println!("  {}. {}{genres}", display_idx + 1, artist.name);
         }
     }
 

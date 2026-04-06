@@ -160,7 +160,14 @@ fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<Stri
         .collect())
 }
 
-fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<RadioTrack>> {
+/// A top track with display metadata.
+pub struct ArtistTopTrack {
+    pub id: String,
+    pub name: String,
+    pub artists: String,
+}
+
+fn fetch_artist_top_tracks_raw(access_token: &str, artist_id: &str) -> Result<Vec<ArtistTopTrack>> {
     let resp = ureq::get(&format!(
         "https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
     ))
@@ -183,8 +190,34 @@ fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<Ra
         .iter()
         .filter_map(|t| {
             let id = t["id"].as_str()?.to_string();
-            Some(RadioTrack { id })
+            let name = t["name"].as_str()?.to_string();
+            let artists = t["artists"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a["name"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            Some(ArtistTopTrack { id, name, artists })
         })
+        .collect())
+}
+
+/// Fetch an artist's top tracks with full metadata (name + artists).
+pub fn fetch_artist_top_tracks_full(
+    spotify: &AuthCodeSpotify,
+    artist_id: &str,
+) -> Result<Vec<ArtistTopTrack>> {
+    let access_token = get_access_token(spotify)?;
+    fetch_artist_top_tracks_raw(&access_token, artist_id)
+}
+
+fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<RadioTrack>> {
+    Ok(fetch_artist_top_tracks_raw(access_token, artist_id)?
+        .into_iter()
+        .map(|t| RadioTrack { id: t.id })
         .collect())
 }
 
