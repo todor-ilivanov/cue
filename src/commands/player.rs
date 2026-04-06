@@ -1320,13 +1320,10 @@ fn run_player_loop(
                     }
 
                     if let Some((tid, aid, title, artist)) = start_radio {
-                        match tid {
-                            Some(track_id) => {
-                                match crate::client::fetch_recommendations(
-                                    spotify,
-                                    &track_id,
-                                    aid.as_deref(),
-                                    50,
+                        match (tid, aid) {
+                            (Some(track_id), Some(artist_id)) => {
+                                match crate::client::fetch_radio_tracks(
+                                    spotify, &artist_id, &track_id, 50,
                                 ) {
                                     Ok(recs) if recs.is_empty() => {
                                         status_message = Some((
@@ -1383,9 +1380,17 @@ fn run_player_loop(
                                 }
                                 needs_redraw = true;
                             }
-                            None => {
+                            (None, _) => {
                                 status_message = Some((
                                     "current track has no ID".to_string(),
+                                    Instant::now(),
+                                    Color::Red,
+                                ));
+                                needs_redraw = true;
+                            }
+                            (_, None) => {
+                                status_message = Some((
+                                    "track has no artist — cannot build radio".to_string(),
                                     Instant::now(),
                                     Color::Red,
                                 ));
