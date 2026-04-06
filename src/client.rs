@@ -132,6 +132,154 @@ pub fn search_playlists(
     serde_json::from_value(json["playlists"].take()).context("failed to parse playlist results")
 }
 
+fn join_artist_names_json(value: &serde_json::Value) -> String {
+    value["artists"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+/// A track within an album or playlist context.
+pub struct ContextTrack {
+    pub id: String,
+    pub uri: String,
+    pub name: String,
+    pub artists: String,
+}
+
+/// Fetch all tracks from an album.
+pub fn fetch_album_tracks(spotify: &AuthCodeSpotify, album_id: &str) -> Result<Vec<ContextTrack>> {
+    let access_token = get_access_token(spotify)?;
+    let mut tracks = Vec::new();
+    let mut offset = 0u32;
+    let limit = 50u32;
+
+    loop {
+        let resp = ureq::get(&format!(
+            "https://api.spotify.com/v1/albums/{album_id}/tracks"
+        ))
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .query("limit", &limit.to_string())
+        .query("offset", &offset.to_string())
+        .call()
+        .context("failed to fetch album tracks")?;
+
+        let body = resp
+            .into_string()
+            .context("failed to read album tracks response")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&body).context("failed to parse album tracks response")?;
+
+        let items = json["items"]
+            .as_array()
+            .context("album tracks response missing items array")?;
+
+        if items.is_empty() {
+            break;
+        }
+
+        for t in items {
+            let id = match t["id"].as_str() {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+            let uri = t["uri"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| format!("spotify:track:{id}"));
+            let name = t["name"].as_str().unwrap_or_default().to_string();
+            let artists = join_artist_names_json(t);
+            tracks.push(ContextTrack {
+                id,
+                uri,
+                name,
+                artists,
+            });
+        }
+
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        offset += limit;
+        if offset >= total {
+            break;
+        }
+    }
+
+    Ok(tracks)
+}
+
+/// Fetch tracks from a playlist (up to 500).
+pub fn fetch_playlist_tracks(
+    spotify: &AuthCodeSpotify,
+    playlist_id: &str,
+) -> Result<Vec<ContextTrack>> {
+    let access_token = get_access_token(spotify)?;
+    let mut tracks = Vec::new();
+    let mut offset = 0u32;
+    let limit = 100u32;
+
+    loop {
+        let resp = ureq::get(&format!(
+            "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+        ))
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .query("limit", &limit.to_string())
+        .query("offset", &offset.to_string())
+        .query("fields", "items(track(id,uri,name,artists(name))),total")
+        .call()
+        .context("failed to fetch playlist tracks")?;
+
+        let body = resp
+            .into_string()
+            .context("failed to read playlist tracks response")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&body).context("failed to parse playlist tracks response")?;
+
+        let items = json["items"]
+            .as_array()
+            .context("playlist tracks response missing items array")?;
+
+        if items.is_empty() {
+            break;
+        }
+
+        for item in items {
+            let t = &item["track"];
+            if t.is_null() {
+                continue;
+            }
+            let id = match t["id"].as_str() {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+            let uri = t["uri"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| format!("spotify:track:{id}"));
+            let name = t["name"].as_str().unwrap_or_default().to_string();
+            let artists = join_artist_names_json(t);
+            tracks.push(ContextTrack {
+                id,
+                uri,
+                name,
+                artists,
+            });
+        }
+
+        let total = json["total"].as_u64().unwrap_or(0) as u32;
+        offset += limit;
+        if offset >= total || tracks.len() >= 500 {
+            break;
+        }
+    }
+
+    Ok(tracks)
+}
+
 pub struct RadioTrack {
     pub id: String,
 }
@@ -191,15 +339,7 @@ fn fetch_artist_top_tracks_raw(access_token: &str, artist_id: &str) -> Result<Ve
         .filter_map(|t| {
             let id = t["id"].as_str()?.to_string();
             let name = t["name"].as_str()?.to_string();
-            let artists = t["artists"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|a| a["name"].as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let artists = join_artist_names_json(t);
             Some(ArtistTopTrack { id, name, artists })
         })
         .collect())

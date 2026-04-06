@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use rspotify::model::{PlayableItem, SearchResult};
+use rspotify::model::{Offset, PlayableItem, SearchResult};
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
 
@@ -7,7 +7,20 @@ use std::thread;
 use std::time::Duration;
 
 use super::{api_error, join_artist_names};
+use crate::client::ContextTrack;
 use crate::ui;
+
+fn context_track_candidates(tracks: &[ContextTrack]) -> Vec<ui::PickCandidate> {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| ui::PickCandidate {
+            name: t.name.clone(),
+            label: format!("{}. {} — {}", i + 1, t.name, t.artists),
+            popularity: Some(super::positional_popularity(i)),
+        })
+        .collect()
+}
 
 pub fn play(
     spotify: &AuthCodeSpotify,
@@ -124,15 +137,33 @@ fn play_album(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
     let album = &albums.items[idx];
     let album_id = album.id.as_ref().context("album has no ID")?;
     let artists = join_artist_names(&album.artists);
+    let album_name = album.name.clone();
 
+    let tracks = ui::with_spinner("Loading tracks...", || {
+        crate::client::fetch_album_tracks(spotify, album_id.id())
+    })?;
+
+    if tracks.is_empty() {
+        bail!("album has no tracks");
+    }
+
+    let track_candidates = context_track_candidates(&tracks);
+
+    let track_pick = ui::pick_result(&album_name, track_candidates, "Start playing from", true)?;
+
+    let offset = Offset::Uri(tracks[track_pick].uri.clone());
     ui::with_spinner("Starting playback...", || {
         let context_id = PlayContextId::Album(album_id.clone());
         spotify
-            .start_context_playback(context_id, None, None, None)
+            .start_context_playback(context_id, None, Some(offset), None)
             .map_err(|e| api_error(e, "start album playback"))
     })?;
 
-    println!("Playing album: {}", ui::styled_song(&album.name, &artists));
+    println!(
+        "Playing album: {} (from {})",
+        ui::styled_song(&album_name, &artists),
+        tracks[track_pick].name
+    );
     Ok(())
 }
 
@@ -158,18 +189,39 @@ fn play_playlist(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Re
     let idx = ui::pick_result(query, candidates, "Select a playlist", force_pick)?;
 
     let playlist = &playlists.items[idx];
+    let playlist_name = playlist.name.clone();
+    let playlist_id = playlist.id.clone();
+    let owner = playlist
+        .owner
+        .display_name
+        .as_deref()
+        .unwrap_or("unknown")
+        .to_string();
 
+    let tracks = ui::with_spinner("Loading tracks...", || {
+        crate::client::fetch_playlist_tracks(spotify, playlist_id.id())
+    })?;
+
+    if tracks.is_empty() {
+        bail!("playlist has no tracks");
+    }
+
+    let track_candidates = context_track_candidates(&tracks);
+
+    let track_pick = ui::pick_result(&playlist_name, track_candidates, "Start playing from", true)?;
+
+    let offset = Offset::Uri(tracks[track_pick].uri.clone());
     ui::with_spinner("Starting playback...", || {
-        let context_id = PlayContextId::Playlist(playlist.id.clone());
+        let context_id = PlayContextId::Playlist(playlist_id.clone());
         spotify
-            .start_context_playback(context_id, None, None, None)
+            .start_context_playback(context_id, None, Some(offset), None)
             .map_err(|e| api_error(e, "start playlist playback"))
     })?;
 
-    let owner = playlist.owner.display_name.as_deref().unwrap_or("unknown");
     println!(
-        "Playing playlist: {}",
-        ui::styled_song(&playlist.name, &format!("by {owner}"))
+        "Playing playlist: {} (from {})",
+        ui::styled_song(&playlist_name, &format!("by {owner}")),
+        tracks[track_pick].name
     );
     Ok(())
 }

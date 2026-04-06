@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use rspotify::model::{
-    AlbumId, ArtistId, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult,
+    AlbumId, ArtistId, Offset, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult,
     SearchType, TrackId,
 };
 use rspotify::prelude::*;
@@ -106,15 +106,34 @@ enum PlayerMode {
         tracks: Vec<SearchResultEntry>,
         selected: usize,
     },
+    ContextTracksLoading {
+        context_name: String,
+        context_target: SearchPlayTarget,
+    },
+    ContextTracks {
+        context_name: String,
+        context_target: SearchPlayTarget,
+        tracks: Vec<SearchResultEntry>,
+        selected: usize,
+    },
 }
 
-fn restore_artist_results(
-    stash: &mut Option<(String, Vec<SearchResultEntry>, usize)>,
+fn category_for_target(target: &SearchPlayTarget) -> SearchCategory {
+    match target {
+        SearchPlayTarget::Album(_) => SearchCategory::Album,
+        SearchPlayTarget::Playlist(_) => SearchCategory::Playlist,
+        SearchPlayTarget::Artist(_) => SearchCategory::Artist,
+        SearchPlayTarget::Track(_) => SearchCategory::Track,
+    }
+}
+
+fn restore_stashed_results(
+    stash: &mut Option<(String, SearchCategory, Vec<SearchResultEntry>, usize)>,
 ) -> PlayerMode {
     match stash.take() {
-        Some((query, results, selected)) => PlayerMode::SearchResults {
+        Some((query, category, results, selected)) => PlayerMode::SearchResults {
             query,
-            category: SearchCategory::Artist,
+            category,
             results,
             selected,
         },
@@ -552,6 +571,31 @@ fn fetch_artist_top_tracks_entries(
         .collect())
 }
 
+fn fetch_context_tracks_entries(
+    spotify: &AuthCodeSpotify,
+    target: &SearchPlayTarget,
+) -> Result<Vec<SearchResultEntry>, String> {
+    let tracks = match target {
+        SearchPlayTarget::Album(id) => crate::client::fetch_album_tracks(spotify, id.id())
+            .map_err(|e| format!("failed to fetch album tracks: {e}"))?,
+        SearchPlayTarget::Playlist(id) => crate::client::fetch_playlist_tracks(spotify, id.id())
+            .map_err(|e| format!("failed to fetch playlist tracks: {e}"))?,
+        _ => return Err("unsupported context type".to_string()),
+    };
+
+    Ok(tracks
+        .into_iter()
+        .filter_map(|t| {
+            let id = TrackId::from_id(&t.id).ok()?.clone_static();
+            Some(SearchResultEntry {
+                title: t.name,
+                subtitle: t.artists,
+                target: SearchPlayTarget::Track(id),
+            })
+        })
+        .collect())
+}
+
 fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategory) {
     let content = content_rect(frame.area());
     let hints_area = Rect {
@@ -624,10 +668,10 @@ fn draw_search_results_overlay(
     let start_y = content.y + card_height;
     let available = content.height.saturating_sub(card_height + bottom_reserve);
 
-    let enter_label = if category == SearchCategory::Artist {
-        " top songs  "
-    } else {
-        " play  "
+    let enter_label = match category {
+        SearchCategory::Artist => " top songs  ",
+        SearchCategory::Album | SearchCategory::Playlist => " tracks  ",
+        SearchCategory::Track => " play  ",
     };
 
     draw_result_list(
@@ -646,7 +690,7 @@ fn draw_search_results_overlay(
         Span::styled("Enter", key_style),
         Span::styled(enter_label, desc_style),
     ];
-    if category != SearchCategory::Artist {
+    if category == SearchCategory::Track {
         hints_spans.push(Span::styled("a", key_style));
         hints_spans.push(Span::styled(" queue  ", desc_style));
     }
@@ -655,13 +699,14 @@ fn draw_search_results_overlay(
     frame.render_widget(Paragraph::new(Line::from(hints_spans)), hints_row);
 }
 
-fn draw_artist_top_tracks_overlay(
+fn draw_track_list_overlay(
     frame: &mut Frame,
-    artist_name: &str,
+    header_text: &str,
+    accent: Color,
+    enter_label: &str,
     tracks: &[SearchResultEntry],
     selected: usize,
 ) {
-    let accent = COLOR_ARTIST;
     let content = content_rect(frame.area());
 
     let header_y = content.y + 1;
@@ -671,7 +716,7 @@ fn draw_artist_top_tracks_overlay(
         ..content
     };
     let header = Line::from(vec![Span::styled(
-        format!("  Top songs by {artist_name}"),
+        format!("  {header_text}"),
         Style::new().fg(accent).add_modifier(Modifier::BOLD),
     )]);
     frame.render_widget(Paragraph::new(header), header_row);
@@ -694,7 +739,7 @@ fn draw_artist_top_tracks_overlay(
     let desc_style = Style::new().fg(Color::DarkGray);
     let hints = Line::from(vec![
         Span::styled("Enter", key_style),
-        Span::styled(" play  ", desc_style),
+        Span::styled(format!(" {enter_label}  "), desc_style),
         Span::styled("a", key_style),
         Span::styled(" queue  ", desc_style),
         Span::styled("Esc", key_style),
@@ -827,7 +872,9 @@ fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
         PlayerMode::SearchInput { query, category } => {
             draw_search_input_bar(frame, query, *category);
         }
-        PlayerMode::SearchLoading { .. } | PlayerMode::ArtistTopTracksLoading { .. } => {
+        PlayerMode::SearchLoading { .. }
+        | PlayerMode::ArtistTopTracksLoading { .. }
+        | PlayerMode::ContextTracksLoading { .. } => {
             draw_search_loading_overlay(frame);
         }
         PlayerMode::SearchResults {
@@ -843,7 +890,35 @@ fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
             tracks,
             selected,
         } => {
-            draw_artist_top_tracks_overlay(frame, artist_name, tracks, *selected);
+            draw_track_list_overlay(
+                frame,
+                &format!("Top songs by {artist_name}"),
+                COLOR_ARTIST,
+                "play",
+                tracks,
+                *selected,
+            );
+        }
+        PlayerMode::ContextTracks {
+            context_name,
+            context_target,
+            tracks,
+            selected,
+        } => {
+            let cat = category_for_target(context_target);
+            let label = if cat == SearchCategory::Album {
+                "Album"
+            } else {
+                "Playlist"
+            };
+            draw_track_list_overlay(
+                frame,
+                &format!("{label}: {context_name}"),
+                cat.color(),
+                "play from here",
+                tracks,
+                *selected,
+            );
         }
         PlayerMode::Normal => {
             if show_help {
@@ -1103,8 +1178,20 @@ fn run_player_loop(
     let mut mode = PlayerMode::Normal;
     let mut search_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
     let mut artist_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
-    // Stashed artist search results so we can go back from top tracks
-    let mut stashed_artist_results: Option<(String, Vec<SearchResultEntry>, usize)> = None;
+    let mut context_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
+    // Stashed search results so we can go back from drill-down views
+    let mut stashed_artist_results: Option<(
+        String,
+        SearchCategory,
+        Vec<SearchResultEntry>,
+        usize,
+    )> = None;
+    let mut stashed_context_results: Option<(
+        String,
+        SearchCategory,
+        Vec<SearchResultEntry>,
+        usize,
+    )> = None;
 
     // Transient status message (auto-clears after 3 seconds)
     let mut status_message: Option<(String, Instant, Color)> = None;
@@ -1126,9 +1213,10 @@ fn run_player_loop(
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Collect deferred actions to avoid borrow conflicts with mode
                     let mut submit_search: Option<(String, SearchCategory)> = None;
-                    let mut play_target: Option<SearchPlayTarget> = None;
+                    let mut play_target: Option<(SearchPlayTarget, Option<Offset>)> = None;
                     let mut queue_target: Option<SearchResultEntry> = None;
                     let mut fetch_top_tracks: Option<(String, ArtistId<'static>)> = None;
+                    let mut fetch_context_tracks: Option<(String, SearchPlayTarget)> = None;
                     #[allow(clippy::type_complexity)]
                     let mut start_radio: Option<(
                         Option<String>,
@@ -1386,33 +1474,62 @@ fn run_player_loop(
                             KeyCode::Enter => {
                                 let idx = *selected;
                                 let entry = &results[idx];
-                                if let SearchPlayTarget::Artist(ref id) = entry.target {
-                                    fetch_top_tracks = Some((entry.title.clone(), id.clone()));
-                                    stashed_artist_results =
-                                        Some((query.clone(), results.clone(), idx));
-                                } else {
-                                    play_target = Some(entry.target.clone());
+                                match entry.target {
+                                    SearchPlayTarget::Artist(ref id) => {
+                                        fetch_top_tracks = Some((entry.title.clone(), id.clone()));
+                                        stashed_artist_results =
+                                            Some((query.clone(), *category, results.clone(), idx));
+                                    }
+                                    SearchPlayTarget::Album(_) | SearchPlayTarget::Playlist(_) => {
+                                        fetch_context_tracks =
+                                            Some((entry.title.clone(), entry.target.clone()));
+                                        stashed_context_results =
+                                            Some((query.clone(), *category, results.clone(), idx));
+                                    }
+                                    SearchPlayTarget::Track(_) => {
+                                        play_target = Some((entry.target.clone(), None));
+                                    }
                                 }
                             }
                             KeyCode::Char(c @ '1'..='9') => {
                                 let idx = (c as usize) - ('1' as usize);
                                 if idx < results.len() {
                                     let entry = &results[idx];
-                                    if let SearchPlayTarget::Artist(ref id) = entry.target {
-                                        fetch_top_tracks = Some((entry.title.clone(), id.clone()));
-                                        stashed_artist_results =
-                                            Some((query.clone(), results.clone(), idx));
-                                    } else {
-                                        play_target = Some(entry.target.clone());
+                                    match entry.target {
+                                        SearchPlayTarget::Artist(ref id) => {
+                                            fetch_top_tracks =
+                                                Some((entry.title.clone(), id.clone()));
+                                            stashed_artist_results = Some((
+                                                query.clone(),
+                                                *category,
+                                                results.clone(),
+                                                idx,
+                                            ));
+                                        }
+                                        SearchPlayTarget::Album(_)
+                                        | SearchPlayTarget::Playlist(_) => {
+                                            fetch_context_tracks =
+                                                Some((entry.title.clone(), entry.target.clone()));
+                                            stashed_context_results = Some((
+                                                query.clone(),
+                                                *category,
+                                                results.clone(),
+                                                idx,
+                                            ));
+                                        }
+                                        SearchPlayTarget::Track(_) => {
+                                            play_target = Some((entry.target.clone(), None));
+                                        }
                                     }
                                 }
                             }
-                            KeyCode::Char('a') if *category != SearchCategory::Artist => {
+                            KeyCode::Char('a') if *category == SearchCategory::Track => {
                                 queue_target = Some(results[*selected].clone());
                             }
                             KeyCode::Esc => {
                                 mode = PlayerMode::Normal;
                                 stashed_artist_results = None;
+                                stashed_context_results = None;
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -1420,7 +1537,7 @@ fn run_player_loop(
                         PlayerMode::ArtistTopTracksLoading { .. } => {
                             if key.code == KeyCode::Esc {
                                 artist_rx = None;
-                                mode = restore_artist_results(&mut stashed_artist_results);
+                                mode = restore_stashed_results(&mut stashed_artist_results);
                                 needs_redraw = true;
                             }
                         }
@@ -1436,19 +1553,64 @@ fn run_player_loop(
                                 needs_redraw = true;
                             }
                             KeyCode::Enter => {
-                                play_target = Some(tracks[*selected].target.clone());
+                                play_target = Some((tracks[*selected].target.clone(), None));
                             }
                             KeyCode::Char(c @ '1'..='9') => {
                                 let idx = (c as usize) - ('1' as usize);
                                 if idx < tracks.len() {
-                                    play_target = Some(tracks[idx].target.clone());
+                                    play_target = Some((tracks[idx].target.clone(), None));
                                 }
                             }
                             KeyCode::Char('a') => {
                                 queue_target = Some(tracks[*selected].clone());
                             }
                             KeyCode::Esc => {
-                                mode = restore_artist_results(&mut stashed_artist_results);
+                                mode = restore_stashed_results(&mut stashed_artist_results);
+                                needs_redraw = true;
+                            }
+                            _ => {}
+                        },
+                        PlayerMode::ContextTracksLoading { .. } => {
+                            if key.code == KeyCode::Esc {
+                                context_rx = None;
+                                mode = restore_stashed_results(&mut stashed_context_results);
+                                needs_redraw = true;
+                            }
+                        }
+                        PlayerMode::ContextTracks {
+                            tracks,
+                            selected,
+                            context_target,
+                            ..
+                        } => match key.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                *selected = selected.saturating_sub(1);
+                                needs_redraw = true;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                *selected = (*selected + 1).min(tracks.len().saturating_sub(1));
+                                needs_redraw = true;
+                            }
+                            KeyCode::Enter => {
+                                if let SearchPlayTarget::Track(ref id) = tracks[*selected].target {
+                                    let offset = Some(Offset::Uri(id.uri()));
+                                    play_target = Some((context_target.clone(), offset));
+                                }
+                            }
+                            KeyCode::Char(c @ '1'..='9') => {
+                                let idx = (c as usize) - ('1' as usize);
+                                if idx < tracks.len() {
+                                    if let SearchPlayTarget::Track(ref id) = tracks[idx].target {
+                                        let offset = Some(Offset::Uri(id.uri()));
+                                        play_target = Some((context_target.clone(), offset));
+                                    }
+                                }
+                            }
+                            KeyCode::Char('a') => {
+                                queue_target = Some(tracks[*selected].clone());
+                            }
+                            KeyCode::Esc => {
+                                mode = restore_stashed_results(&mut stashed_context_results);
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -1485,8 +1647,25 @@ fn run_player_loop(
                         needs_redraw = true;
                     }
 
+                    // Handle deferred context tracks fetch (album/playlist)
+                    if let Some((context_name, target)) = fetch_context_tracks {
+                        let sp = spotify.clone();
+                        let tgt = target.clone();
+                        let (tx, rx) = mpsc::channel();
+                        context_rx = Some(rx);
+                        mode = PlayerMode::ContextTracksLoading {
+                            context_name,
+                            context_target: target,
+                        };
+                        std::thread::spawn(move || {
+                            let result = fetch_context_tracks_entries(&sp, &tgt);
+                            let _ = tx.send(result);
+                        });
+                        needs_redraw = true;
+                    }
+
                     // Handle deferred play action (avoids borrow conflict)
-                    if let Some(target) = play_target {
+                    if let Some((target, offset)) = play_target {
                         let result = match target {
                             SearchPlayTarget::Track(id) => spotify.start_uris_playback(
                                 [PlayableId::Track(id)],
@@ -1497,13 +1676,13 @@ fn run_player_loop(
                             SearchPlayTarget::Album(id) => spotify.start_context_playback(
                                 PlayContextId::Album(id),
                                 None,
-                                None,
+                                offset,
                                 None,
                             ),
                             SearchPlayTarget::Playlist(id) => spotify.start_context_playback(
                                 PlayContextId::Playlist(id),
                                 None,
-                                None,
+                                offset,
                                 None,
                             ),
                             SearchPlayTarget::Artist(_) => unreachable!(
@@ -1524,6 +1703,7 @@ fn run_player_loop(
                             }
                         }
                         stashed_artist_results = None;
+                        stashed_context_results = None;
                         mode = PlayerMode::Normal;
                         needs_redraw = true;
                     }
@@ -1564,6 +1744,7 @@ fn run_player_loop(
                             }
                         }
                         stashed_artist_results = None;
+                        stashed_context_results = None;
                         mode = PlayerMode::Normal;
                         needs_redraw = true;
                     }
@@ -1784,7 +1965,7 @@ fn run_player_loop(
                                 Instant::now(),
                                 Color::Red,
                             ));
-                            mode = restore_artist_results(&mut stashed_artist_results);
+                            mode = restore_stashed_results(&mut stashed_artist_results);
                         } else {
                             mode = PlayerMode::ArtistTopTracks {
                                 artist_name: artist_name.clone(),
@@ -1798,13 +1979,61 @@ fn run_player_loop(
                 Ok(Err(msg)) => {
                     artist_rx = None;
                     status_message = Some((msg, Instant::now(), Color::Red));
-                    mode = restore_artist_results(&mut stashed_artist_results);
+                    mode = restore_stashed_results(&mut stashed_artist_results);
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     artist_rx = None;
                     status_message = Some((
                         "failed to fetch top tracks".to_string(),
+                        Instant::now(),
+                        Color::Red,
+                    ));
+                    mode = PlayerMode::Normal;
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        // Check for context tracks result (album/playlist).
+        if let Some(ref rx) = context_rx {
+            match rx.try_recv() {
+                Ok(Ok(tracks)) => {
+                    context_rx = None;
+                    if let PlayerMode::ContextTracksLoading {
+                        context_name,
+                        context_target,
+                    } = &mode
+                    {
+                        if tracks.is_empty() {
+                            status_message = Some((
+                                format!("no tracks in {context_name}"),
+                                Instant::now(),
+                                Color::Red,
+                            ));
+                            mode = restore_stashed_results(&mut stashed_context_results);
+                        } else {
+                            mode = PlayerMode::ContextTracks {
+                                context_name: context_name.clone(),
+                                context_target: context_target.clone(),
+                                tracks,
+                                selected: 0,
+                            };
+                        }
+                    }
+                    needs_redraw = true;
+                }
+                Ok(Err(msg)) => {
+                    context_rx = None;
+                    status_message = Some((msg, Instant::now(), Color::Red));
+                    mode = restore_stashed_results(&mut stashed_context_results);
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    context_rx = None;
+                    status_message = Some((
+                        "failed to fetch tracks".to_string(),
                         Instant::now(),
                         Color::Red,
                     ));
