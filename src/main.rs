@@ -59,17 +59,21 @@ Examples:
         #[arg(long)]
         slim: bool,
     },
-    /// Search for tracks or albums
+    /// Search for tracks, albums, or artists
     #[command(after_help = "\
 Examples:
   cue search bohemian rhapsody
-  cue search --album abbey road")]
+  cue search --album abbey road
+  cue search --artist radiohead")]
     Search {
         /// Search query
         query: Vec<String>,
         /// Search for albums instead of tracks
         #[arg(long)]
         album: bool,
+        /// Search for artists instead of tracks
+        #[arg(long)]
+        artist: bool,
     },
     /// List available playback devices
     Devices,
@@ -158,9 +162,13 @@ fn main() -> Result<()> {
         Command::Prev => commands::play::prev(&spotify)?,
         Command::Now => commands::search::now(&spotify)?,
         Command::Player { slim } => commands::player::player(&spotify, slim)?,
-        Command::Search { query, album } => {
+        Command::Search {
+            query,
+            album,
+            artist,
+        } => {
             let query = query.join(" ");
-            commands::search::search(&spotify, &query, album)?;
+            commands::search::search(&spotify, &query, album, artist)?;
         }
         Command::Devices => commands::devices::devices(&spotify)?,
         Command::Device { name } => {

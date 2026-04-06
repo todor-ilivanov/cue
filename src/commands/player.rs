@@ -6,7 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use rspotify::model::{
-    AlbumId, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult, SearchType, TrackId,
+    AlbumId, ArtistId, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult,
+    SearchType, TrackId,
 };
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
@@ -23,11 +24,18 @@ use std::time::{Duration, Instant};
 const ACCENT: Color = Color::Rgb(255, 191, 0);
 const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
 
+// Category accent colors
+const COLOR_TRACK: Color = Color::Rgb(255, 191, 0);
+const COLOR_ALBUM: Color = Color::Rgb(255, 130, 140);
+const COLOR_PLAYLIST: Color = Color::Rgb(130, 170, 255);
+const COLOR_ARTIST: Color = Color::Rgb(120, 220, 120);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SearchCategory {
     Track,
     Album,
     Playlist,
+    Artist,
 }
 
 impl SearchCategory {
@@ -35,7 +43,8 @@ impl SearchCategory {
         match self {
             Self::Track => Self::Album,
             Self::Album => Self::Playlist,
-            Self::Playlist => Self::Track,
+            Self::Playlist => Self::Artist,
+            Self::Artist => Self::Track,
         }
     }
 
@@ -44,6 +53,16 @@ impl SearchCategory {
             Self::Track => "Track",
             Self::Album => "Album",
             Self::Playlist => "Playlist",
+            Self::Artist => "Artist",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::Track => COLOR_TRACK,
+            Self::Album => COLOR_ALBUM,
+            Self::Playlist => COLOR_PLAYLIST,
+            Self::Artist => COLOR_ARTIST,
         }
     }
 }
@@ -53,6 +72,7 @@ enum SearchPlayTarget {
     Track(TrackId<'static>),
     Album(AlbumId<'static>),
     Playlist(PlaylistId<'static>),
+    Artist(ArtistId<'static>),
 }
 
 #[derive(Clone)]
@@ -75,9 +95,16 @@ enum PlayerMode {
     SearchResults {
         #[allow(dead_code)]
         query: String,
-        #[allow(dead_code)]
         category: SearchCategory,
         results: Vec<SearchResultEntry>,
+        selected: usize,
+    },
+    ArtistTopTracksLoading {
+        artist_name: String,
+    },
+    ArtistTopTracks {
+        artist_name: String,
+        tracks: Vec<SearchResultEntry>,
         selected: usize,
     },
 }
@@ -359,6 +386,7 @@ fn perform_search(
         SearchCategory::Track => perform_track_search(spotify, query),
         SearchCategory::Album => perform_album_search(spotify, query),
         SearchCategory::Playlist => perform_playlist_search(spotify, query),
+        SearchCategory::Artist => perform_artist_search(spotify, query),
     }
 }
 
@@ -457,6 +485,60 @@ fn perform_playlist_search(
     }
 }
 
+fn perform_artist_search(
+    spotify: &AuthCodeSpotify,
+    query: &str,
+) -> Result<Vec<SearchResultEntry>, String> {
+    let result = spotify
+        .search(query, SearchType::Artist, None, None, Some(5), None)
+        .map_err(|e| format!("search failed: {e}"))?;
+
+    let artists = match result {
+        SearchResult::Artists(page) => page,
+        _ => return Err("unexpected search result type".to_string()),
+    };
+
+    let entries: Vec<SearchResultEntry> = artists
+        .items
+        .into_iter()
+        .map(|a| SearchResultEntry {
+            title: a.name,
+            subtitle: if a.genres.is_empty() {
+                String::new()
+            } else {
+                a.genres.into_iter().take(3).collect::<Vec<_>>().join(", ")
+            },
+            target: SearchPlayTarget::Artist(a.id),
+        })
+        .collect();
+
+    if entries.is_empty() {
+        Err(format!("no artists for \"{query}\""))
+    } else {
+        Ok(entries)
+    }
+}
+
+fn fetch_artist_top_tracks_entries(
+    spotify: &AuthCodeSpotify,
+    artist_id: &str,
+) -> Result<Vec<SearchResultEntry>, String> {
+    let tracks = crate::client::fetch_artist_top_tracks_full(spotify, artist_id)
+        .map_err(|e| format!("failed to fetch top tracks: {e}"))?;
+
+    Ok(tracks
+        .into_iter()
+        .filter_map(|t| {
+            let id = TrackId::from_id(&t.id).ok()?.clone_static();
+            Some(SearchResultEntry {
+                title: t.name,
+                subtitle: t.artists,
+                target: SearchPlayTarget::Track(id),
+            })
+        })
+        .collect())
+}
+
 fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategory) {
     let content = content_rect(frame.area());
     let hints_area = Rect {
@@ -465,38 +547,22 @@ fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategor
         ..content
     };
 
-    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let cat_color = category.color();
+    let pill_style = Style::new()
+        .fg(Color::Black)
+        .bg(cat_color)
+        .add_modifier(Modifier::BOLD);
+    let key_style = Style::new().fg(cat_color).add_modifier(Modifier::BOLD);
     let desc_style = Style::new().fg(Color::DarkGray);
-    let dim_style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
-    let active_style = Style::new().fg(ACCENT);
 
-    let categories = [
-        SearchCategory::Track,
-        SearchCategory::Album,
-        SearchCategory::Playlist,
+    let label = category.label();
+    let mut left: Vec<Span> = vec![
+        Span::styled(format!(" {label} "), pill_style),
+        Span::styled(" ", Style::new()),
+        Span::styled(query, Style::new().fg(Color::White)),
+        Span::styled("_", Style::new().fg(Color::DarkGray)),
     ];
-    let mut left: Vec<Span> = Vec::new();
-    let mut left_width: usize = 0;
-    for (i, &cat) in categories.iter().enumerate() {
-        if i > 0 {
-            left.push(Span::styled("/", dim_style));
-            left_width += 1;
-        }
-        let label = cat.label();
-        if cat == category {
-            left.push(Span::styled(label, active_style));
-        } else {
-            left.push(Span::styled(label, dim_style));
-        }
-        left_width += label.len();
-    }
-    left.push(Span::styled(" ", Style::new()));
-    left_width += 1;
-
-    left.push(Span::styled("/ ", key_style));
-    left.push(Span::styled(query, Style::new().fg(Color::White)));
-    left.push(Span::styled("_", Style::new().fg(Color::DarkGray)));
-    left_width += 2 + query.len() + 1;
+    let left_width = label.len() + 2 + 1 + query.len() + 1;
 
     let right_parts = vec![
         Span::styled("Tab", key_style),
@@ -509,11 +575,10 @@ fn draw_search_input_bar(frame: &mut Frame, query: &str, category: SearchCategor
     let right_width: usize = right_parts.iter().map(|s| s.content.len()).sum();
 
     let padding = (hints_area.width as usize).saturating_sub(left_width + right_width);
-    let mut spans = left;
-    spans.push(Span::raw(" ".repeat(padding)));
-    spans.extend(right_parts);
+    left.push(Span::raw(" ".repeat(padding)));
+    left.extend(right_parts);
 
-    frame.render_widget(Paragraph::new(Line::from(spans)), hints_area);
+    frame.render_widget(Paragraph::new(Line::from(left)), hints_area);
 }
 
 fn draw_search_loading_overlay(frame: &mut Frame) {
@@ -531,7 +596,13 @@ fn draw_search_loading_overlay(frame: &mut Frame) {
     frame.render_widget(Paragraph::new(text), row);
 }
 
-fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry], selected: usize) {
+fn draw_search_results_overlay(
+    frame: &mut Frame,
+    results: &[SearchResultEntry],
+    selected: usize,
+    category: SearchCategory,
+) {
+    let accent = category.color();
     let content = content_rect(frame.area());
     let compact = content.height < 10;
     let top_margin: u16 = if content.height > 12 { 1 } else { 0 };
@@ -540,6 +611,95 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
     let start_y = content.y + card_height;
     let available = content.height.saturating_sub(card_height + bottom_reserve);
 
+    let enter_label = if category == SearchCategory::Artist {
+        " top songs  "
+    } else {
+        " play  "
+    };
+
+    draw_result_list(
+        frame, results, selected, accent, start_y, available, content,
+    );
+
+    let hints_y = content.y + content.height.saturating_sub(1);
+    let hints_row = Rect {
+        y: hints_y,
+        height: 1,
+        ..content
+    };
+    let key_style = Style::new().fg(accent).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
+    let mut hints_spans = vec![
+        Span::styled("Enter", key_style),
+        Span::styled(enter_label, desc_style),
+    ];
+    if category != SearchCategory::Artist {
+        hints_spans.push(Span::styled("a", key_style));
+        hints_spans.push(Span::styled(" queue  ", desc_style));
+    }
+    hints_spans.push(Span::styled("Esc", key_style));
+    hints_spans.push(Span::styled(" cancel", desc_style));
+    frame.render_widget(Paragraph::new(Line::from(hints_spans)), hints_row);
+}
+
+fn draw_artist_top_tracks_overlay(
+    frame: &mut Frame,
+    artist_name: &str,
+    tracks: &[SearchResultEntry],
+    selected: usize,
+) {
+    let accent = COLOR_ARTIST;
+    let content = content_rect(frame.area());
+
+    // Header: "Top songs by {artist}"
+    let header_y = content.y + 1;
+    let header_row = Rect {
+        y: header_y,
+        height: 1,
+        ..content
+    };
+    let header = Line::from(vec![Span::styled(
+        format!("  Top songs by {artist_name}"),
+        Style::new().fg(accent).add_modifier(Modifier::BOLD),
+    )]);
+    frame.render_widget(Paragraph::new(header), header_row);
+
+    let start_y = header_y + 2;
+    let bottom_reserve = 2u16;
+    let available = content
+        .height
+        .saturating_sub((start_y - content.y) + bottom_reserve);
+
+    draw_result_list(frame, tracks, selected, accent, start_y, available, content);
+
+    let hints_y = content.y + content.height.saturating_sub(1);
+    let hints_row = Rect {
+        y: hints_y,
+        height: 1,
+        ..content
+    };
+    let key_style = Style::new().fg(accent).add_modifier(Modifier::BOLD);
+    let desc_style = Style::new().fg(Color::DarkGray);
+    let hints = Line::from(vec![
+        Span::styled("Enter", key_style),
+        Span::styled(" play  ", desc_style),
+        Span::styled("a", key_style),
+        Span::styled(" queue  ", desc_style),
+        Span::styled("Esc", key_style),
+        Span::styled(" back", desc_style),
+    ]);
+    frame.render_widget(Paragraph::new(hints), hints_row);
+}
+
+fn draw_result_list(
+    frame: &mut Frame,
+    results: &[SearchResultEntry],
+    selected: usize,
+    accent: Color,
+    start_y: u16,
+    available: u16,
+    content: Rect,
+) {
     for (i, entry) in results.iter().enumerate() {
         if i as u16 >= available {
             break;
@@ -554,8 +714,8 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
         let num = format!("{}. ", i + 1);
         let (title_style, artist_style) = if is_selected {
             (
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                Style::new().fg(ACCENT),
+                Style::new().fg(accent).add_modifier(Modifier::BOLD),
+                Style::new().fg(accent),
             )
         } else {
             (
@@ -563,33 +723,17 @@ fn draw_search_results_overlay(frame: &mut Frame, results: &[SearchResultEntry],
                 Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
             )
         };
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(prefix, title_style),
             Span::styled(num, title_style),
             Span::styled(&entry.title, title_style),
-            Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)),
-            Span::styled(&entry.subtitle, artist_style),
-        ]);
-        frame.render_widget(Paragraph::new(line), row);
+        ];
+        if !entry.subtitle.is_empty() {
+            spans.push(Span::styled(" \u{2014} ", Style::new().fg(Color::DarkGray)));
+            spans.push(Span::styled(&entry.subtitle, artist_style));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
     }
-
-    let hints_y = content.y + content.height.saturating_sub(1);
-    let hints_row = Rect {
-        y: hints_y,
-        height: 1,
-        ..content
-    };
-    let key_style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let desc_style = Style::new().fg(Color::DarkGray);
-    let hints = Line::from(vec![
-        Span::styled("Enter", key_style),
-        Span::styled(" play  ", desc_style),
-        Span::styled("a", key_style),
-        Span::styled(" queue  ", desc_style),
-        Span::styled("Esc", key_style),
-        Span::styled(" cancel", desc_style),
-    ]);
-    frame.render_widget(Paragraph::new(hints), hints_row);
 }
 
 fn draw_empty(frame: &mut Frame, status_message: Option<(&str, Color)>) {
@@ -671,13 +815,23 @@ fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
         PlayerMode::SearchInput { query, category } => {
             draw_search_input_bar(frame, query, *category);
         }
-        PlayerMode::SearchLoading { .. } => {
+        PlayerMode::SearchLoading { .. } | PlayerMode::ArtistTopTracksLoading { .. } => {
             draw_search_loading_overlay(frame);
         }
         PlayerMode::SearchResults {
-            results, selected, ..
+            results,
+            selected,
+            category,
+            ..
         } => {
-            draw_search_results_overlay(frame, results, *selected);
+            draw_search_results_overlay(frame, results, *selected, *category);
+        }
+        PlayerMode::ArtistTopTracks {
+            artist_name,
+            tracks,
+            selected,
+        } => {
+            draw_artist_top_tracks_overlay(frame, artist_name, tracks, *selected);
         }
         PlayerMode::Normal => {
             if show_help {
@@ -936,6 +1090,9 @@ fn run_player_loop(
     // Search state
     let mut mode = PlayerMode::Normal;
     let mut search_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
+    let mut artist_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
+    // Stashed artist search results so we can go back from top tracks
+    let mut stashed_artist_results: Option<(String, Vec<SearchResultEntry>, usize)> = None;
 
     // Transient status message (auto-clears after 3 seconds)
     let mut status_message: Option<(String, Instant, Color)> = None;
@@ -959,6 +1116,7 @@ fn run_player_loop(
                     let mut submit_search: Option<(String, SearchCategory)> = None;
                     let mut play_target: Option<SearchPlayTarget> = None;
                     let mut queue_target: Option<SearchResultEntry> = None;
+                    let mut fetch_top_tracks: Option<(String, ArtistId<'static>)> = None;
                     #[allow(clippy::type_complexity)]
                     let mut start_radio: Option<(
                         Option<String>,
@@ -1200,7 +1358,10 @@ fn run_player_loop(
                             }
                         }
                         PlayerMode::SearchResults {
-                            results, selected, ..
+                            results,
+                            selected,
+                            query,
+                            category,
                         } => match key.code {
                             KeyCode::Up | KeyCode::Char('k') => {
                                 *selected = selected.saturating_sub(1);
@@ -1211,19 +1372,90 @@ fn run_player_loop(
                                 needs_redraw = true;
                             }
                             KeyCode::Enter => {
-                                play_target = Some(results[*selected].target.clone());
+                                let entry = &results[*selected];
+                                if let SearchPlayTarget::Artist(ref id) = entry.target {
+                                    fetch_top_tracks = Some((entry.title.clone(), id.clone()));
+                                    stashed_artist_results =
+                                        Some((query.clone(), results.clone(), *selected));
+                                } else {
+                                    play_target = Some(entry.target.clone());
+                                }
                             }
                             KeyCode::Char(c @ '1'..='9') => {
                                 let idx = (c as usize) - ('1' as usize);
                                 if idx < results.len() {
-                                    play_target = Some(results[idx].target.clone());
+                                    let entry = &results[idx];
+                                    if let SearchPlayTarget::Artist(ref id) = entry.target {
+                                        fetch_top_tracks = Some((entry.title.clone(), id.clone()));
+                                        stashed_artist_results =
+                                            Some((query.clone(), results.clone(), idx));
+                                    } else {
+                                        play_target = Some(entry.target.clone());
+                                    }
                                 }
                             }
-                            KeyCode::Char('a') => {
+                            KeyCode::Char('a') if *category != SearchCategory::Artist => {
                                 queue_target = Some(results[*selected].clone());
                             }
                             KeyCode::Esc => {
                                 mode = PlayerMode::Normal;
+                                stashed_artist_results = None;
+                                needs_redraw = true;
+                            }
+                            _ => {}
+                        },
+                        PlayerMode::ArtistTopTracksLoading { .. } => {
+                            if key.code == KeyCode::Esc {
+                                artist_rx = None;
+                                // Go back to artist results if stashed
+                                if let Some((query, results, sel)) = stashed_artist_results.take() {
+                                    mode = PlayerMode::SearchResults {
+                                        query,
+                                        category: SearchCategory::Artist,
+                                        results,
+                                        selected: sel,
+                                    };
+                                } else {
+                                    mode = PlayerMode::Normal;
+                                }
+                                needs_redraw = true;
+                            }
+                        }
+                        PlayerMode::ArtistTopTracks {
+                            tracks, selected, ..
+                        } => match key.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                *selected = selected.saturating_sub(1);
+                                needs_redraw = true;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                *selected = (*selected + 1).min(tracks.len().saturating_sub(1));
+                                needs_redraw = true;
+                            }
+                            KeyCode::Enter => {
+                                play_target = Some(tracks[*selected].target.clone());
+                            }
+                            KeyCode::Char(c @ '1'..='9') => {
+                                let idx = (c as usize) - ('1' as usize);
+                                if idx < tracks.len() {
+                                    play_target = Some(tracks[idx].target.clone());
+                                }
+                            }
+                            KeyCode::Char('a') => {
+                                queue_target = Some(tracks[*selected].clone());
+                            }
+                            KeyCode::Esc => {
+                                // Go back to artist search results
+                                if let Some((query, results, sel)) = stashed_artist_results.take() {
+                                    mode = PlayerMode::SearchResults {
+                                        query,
+                                        category: SearchCategory::Artist,
+                                        results,
+                                        selected: sel,
+                                    };
+                                } else {
+                                    mode = PlayerMode::Normal;
+                                }
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -1241,6 +1473,20 @@ fn run_player_loop(
                         };
                         std::thread::spawn(move || {
                             let result = perform_search(&sp, &q, cat);
+                            let _ = tx.send(result);
+                        });
+                        needs_redraw = true;
+                    }
+
+                    // Handle deferred artist top tracks fetch
+                    if let Some((artist_name, artist_id)) = fetch_top_tracks {
+                        let sp = spotify.clone();
+                        let aid = artist_id.id().to_string();
+                        let (tx, rx) = mpsc::channel();
+                        artist_rx = Some(rx);
+                        mode = PlayerMode::ArtistTopTracksLoading { artist_name };
+                        std::thread::spawn(move || {
+                            let result = fetch_artist_top_tracks_entries(&sp, &aid);
                             let _ = tx.send(result);
                         });
                         needs_redraw = true;
@@ -1267,6 +1513,10 @@ fn run_player_loop(
                                 None,
                                 None,
                             ),
+                            SearchPlayTarget::Artist(_) => {
+                                // Artists are handled via fetch_top_tracks, not direct play
+                                Ok(())
+                            }
                         };
                         match result {
                             Err(e) => {
@@ -1281,6 +1531,7 @@ fn run_player_loop(
                                 queue_context = None;
                             }
                         }
+                        stashed_artist_results = None;
                         mode = PlayerMode::Normal;
                         needs_redraw = true;
                     }
@@ -1310,7 +1561,9 @@ fn run_player_loop(
                                     }
                                 }
                             }
-                            SearchPlayTarget::Album(_) | SearchPlayTarget::Playlist(_) => {
+                            SearchPlayTarget::Album(_)
+                            | SearchPlayTarget::Playlist(_)
+                            | SearchPlayTarget::Artist(_) => {
                                 status_message = Some((
                                     "Only tracks can be added to queue".to_string(),
                                     Instant::now(),
@@ -1318,6 +1571,7 @@ fn run_player_loop(
                                 ));
                             }
                         }
+                        stashed_artist_results = None;
                         mode = PlayerMode::Normal;
                         needs_redraw = true;
                     }
@@ -1526,6 +1780,67 @@ fn run_player_loop(
             }
         }
 
+        // Check for artist top tracks result.
+        if let Some(ref rx) = artist_rx {
+            match rx.try_recv() {
+                Ok(Ok(tracks)) => {
+                    artist_rx = None;
+                    if let PlayerMode::ArtistTopTracksLoading { artist_name } = &mode {
+                        if tracks.is_empty() {
+                            status_message = Some((
+                                format!("no top tracks for {artist_name}"),
+                                Instant::now(),
+                                Color::Red,
+                            ));
+                            if let Some((query, results, sel)) = stashed_artist_results.take() {
+                                mode = PlayerMode::SearchResults {
+                                    query,
+                                    category: SearchCategory::Artist,
+                                    results,
+                                    selected: sel,
+                                };
+                            } else {
+                                mode = PlayerMode::Normal;
+                            }
+                        } else {
+                            mode = PlayerMode::ArtistTopTracks {
+                                artist_name: artist_name.clone(),
+                                tracks,
+                                selected: 0,
+                            };
+                        }
+                    }
+                    needs_redraw = true;
+                }
+                Ok(Err(msg)) => {
+                    artist_rx = None;
+                    status_message = Some((msg, Instant::now(), Color::Red));
+                    if let Some((query, results, sel)) = stashed_artist_results.take() {
+                        mode = PlayerMode::SearchResults {
+                            query,
+                            category: SearchCategory::Artist,
+                            results,
+                            selected: sel,
+                        };
+                    } else {
+                        mode = PlayerMode::Normal;
+                    }
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    artist_rx = None;
+                    status_message = Some((
+                        "failed to fetch top tracks".to_string(),
+                        Instant::now(),
+                        Color::Red,
+                    ));
+                    mode = PlayerMode::Normal;
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
         // Draw
         match &info {
             Some(track) => {
@@ -1627,6 +1942,8 @@ mod tests {
             progress_ms,
             is_playing,
             volume_percent: volume,
+            track_id: None,
+            artist_id: None,
         }
     }
 
@@ -1680,6 +1997,7 @@ mod tests {
     fn search_category_cycles_forward() {
         assert_eq!(SearchCategory::Track.next(), SearchCategory::Album);
         assert_eq!(SearchCategory::Album.next(), SearchCategory::Playlist);
-        assert_eq!(SearchCategory::Playlist.next(), SearchCategory::Track);
+        assert_eq!(SearchCategory::Playlist.next(), SearchCategory::Artist);
+        assert_eq!(SearchCategory::Artist.next(), SearchCategory::Track);
     }
 }
