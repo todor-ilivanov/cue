@@ -25,7 +25,7 @@ const ACCENT: Color = Color::Rgb(255, 191, 0);
 const SEPARATOR_COLOR: Color = Color::Rgb(60, 60, 60);
 
 // Category accent colors
-const COLOR_TRACK: Color = Color::Rgb(255, 191, 0);
+const COLOR_TRACK: Color = ACCENT;
 const COLOR_ALBUM: Color = Color::Rgb(255, 130, 140);
 const COLOR_PLAYLIST: Color = Color::Rgb(130, 170, 255);
 const COLOR_ARTIST: Color = Color::Rgb(120, 220, 120);
@@ -93,7 +93,6 @@ enum PlayerMode {
         category: SearchCategory,
     },
     SearchResults {
-        #[allow(dead_code)]
         query: String,
         category: SearchCategory,
         results: Vec<SearchResultEntry>,
@@ -107,6 +106,20 @@ enum PlayerMode {
         tracks: Vec<SearchResultEntry>,
         selected: usize,
     },
+}
+
+fn restore_artist_results(
+    stash: &mut Option<(String, Vec<SearchResultEntry>, usize)>,
+) -> PlayerMode {
+    match stash.take() {
+        Some((query, results, selected)) => PlayerMode::SearchResults {
+            query,
+            category: SearchCategory::Artist,
+            results,
+            selected,
+        },
+        None => PlayerMode::Normal,
+    }
 }
 
 struct TrackInfo {
@@ -651,7 +664,6 @@ fn draw_artist_top_tracks_overlay(
     let accent = COLOR_ARTIST;
     let content = content_rect(frame.area());
 
-    // Header: "Top songs by {artist}"
     let header_y = content.y + 1;
     let header_row = Rect {
         y: header_y,
@@ -1372,11 +1384,12 @@ fn run_player_loop(
                                 needs_redraw = true;
                             }
                             KeyCode::Enter => {
-                                let entry = &results[*selected];
+                                let idx = *selected;
+                                let entry = &results[idx];
                                 if let SearchPlayTarget::Artist(ref id) = entry.target {
                                     fetch_top_tracks = Some((entry.title.clone(), id.clone()));
                                     stashed_artist_results =
-                                        Some((query.clone(), results.clone(), *selected));
+                                        Some((query.clone(), results.clone(), idx));
                                 } else {
                                     play_target = Some(entry.target.clone());
                                 }
@@ -1407,17 +1420,7 @@ fn run_player_loop(
                         PlayerMode::ArtistTopTracksLoading { .. } => {
                             if key.code == KeyCode::Esc {
                                 artist_rx = None;
-                                // Go back to artist results if stashed
-                                if let Some((query, results, sel)) = stashed_artist_results.take() {
-                                    mode = PlayerMode::SearchResults {
-                                        query,
-                                        category: SearchCategory::Artist,
-                                        results,
-                                        selected: sel,
-                                    };
-                                } else {
-                                    mode = PlayerMode::Normal;
-                                }
+                                mode = restore_artist_results(&mut stashed_artist_results);
                                 needs_redraw = true;
                             }
                         }
@@ -1445,17 +1448,7 @@ fn run_player_loop(
                                 queue_target = Some(tracks[*selected].clone());
                             }
                             KeyCode::Esc => {
-                                // Go back to artist search results
-                                if let Some((query, results, sel)) = stashed_artist_results.take() {
-                                    mode = PlayerMode::SearchResults {
-                                        query,
-                                        category: SearchCategory::Artist,
-                                        results,
-                                        selected: sel,
-                                    };
-                                } else {
-                                    mode = PlayerMode::Normal;
-                                }
+                                mode = restore_artist_results(&mut stashed_artist_results);
                                 needs_redraw = true;
                             }
                             _ => {}
@@ -1513,10 +1506,9 @@ fn run_player_loop(
                                 None,
                                 None,
                             ),
-                            SearchPlayTarget::Artist(_) => {
-                                // Artists are handled via fetch_top_tracks, not direct play
-                                Ok(())
-                            }
+                            SearchPlayTarget::Artist(_) => unreachable!(
+                                "artist targets are routed to fetch_top_tracks, not play"
+                            ),
                         };
                         match result {
                             Err(e) => {
@@ -1792,16 +1784,7 @@ fn run_player_loop(
                                 Instant::now(),
                                 Color::Red,
                             ));
-                            if let Some((query, results, sel)) = stashed_artist_results.take() {
-                                mode = PlayerMode::SearchResults {
-                                    query,
-                                    category: SearchCategory::Artist,
-                                    results,
-                                    selected: sel,
-                                };
-                            } else {
-                                mode = PlayerMode::Normal;
-                            }
+                            mode = restore_artist_results(&mut stashed_artist_results);
                         } else {
                             mode = PlayerMode::ArtistTopTracks {
                                 artist_name: artist_name.clone(),
@@ -1815,16 +1798,7 @@ fn run_player_loop(
                 Ok(Err(msg)) => {
                     artist_rx = None;
                     status_message = Some((msg, Instant::now(), Color::Red));
-                    if let Some((query, results, sel)) = stashed_artist_results.take() {
-                        mode = PlayerMode::SearchResults {
-                            query,
-                            category: SearchCategory::Artist,
-                            results,
-                            selected: sel,
-                        };
-                    } else {
-                        mode = PlayerMode::Normal;
-                    }
+                    mode = restore_artist_results(&mut stashed_artist_results);
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {

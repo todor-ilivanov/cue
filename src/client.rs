@@ -167,13 +167,7 @@ pub struct ArtistTopTrack {
     pub artists: String,
 }
 
-/// Fetch an artist's top tracks with full metadata (name + artists).
-pub fn fetch_artist_top_tracks_full(
-    spotify: &AuthCodeSpotify,
-    artist_id: &str,
-) -> Result<Vec<ArtistTopTrack>> {
-    let access_token = get_access_token(spotify)?;
-
+fn fetch_artist_top_tracks_raw(access_token: &str, artist_id: &str) -> Result<Vec<ArtistTopTrack>> {
     let resp = ureq::get(&format!(
         "https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
     ))
@@ -211,31 +205,19 @@ pub fn fetch_artist_top_tracks_full(
         .collect())
 }
 
+/// Fetch an artist's top tracks with full metadata (name + artists).
+pub fn fetch_artist_top_tracks_full(
+    spotify: &AuthCodeSpotify,
+    artist_id: &str,
+) -> Result<Vec<ArtistTopTrack>> {
+    let access_token = get_access_token(spotify)?;
+    fetch_artist_top_tracks_raw(&access_token, artist_id)
+}
+
 fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<RadioTrack>> {
-    let resp = ureq::get(&format!(
-        "https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
-    ))
-    .set("Authorization", &format!("Bearer {access_token}"))
-    .query("market", "US")
-    .call()
-    .context("failed to fetch artist top tracks")?;
-
-    let body = resp
-        .into_string()
-        .context("failed to read top tracks response")?;
-    let json: serde_json::Value =
-        serde_json::from_str(&body).context("failed to parse top tracks response")?;
-
-    let tracks = json["tracks"]
-        .as_array()
-        .context("top tracks response missing tracks array")?;
-
-    Ok(tracks
-        .iter()
-        .filter_map(|t| {
-            let id = t["id"].as_str()?.to_string();
-            Some(RadioTrack { id })
-        })
+    Ok(fetch_artist_top_tracks_raw(access_token, artist_id)?
+        .into_iter()
+        .map(|t| RadioTrack { id: t.id })
         .collect())
 }
 
