@@ -71,8 +71,11 @@ fn play_track(spotify: &AuthCodeSpotify, query: &str, force_pick: bool) -> Resul
     ui::with_spinner("Starting playback...", || {
         let playable = PlayableId::Track(track_id.clone());
         spotify
-            .start_uris_playback([playable], None, None, None)
-            .map_err(|e| api_error(e, "start playback"))
+            .add_item_to_queue(playable, None)
+            .map_err(|e| api_error(e, "add track to queue"))?;
+        spotify
+            .next_track(None)
+            .map_err(|e| api_error(e, "skip to queued track"))
     })?;
 
     println!("Playing: {}", ui::styled_song(&track.name, &artists));
