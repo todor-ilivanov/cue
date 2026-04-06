@@ -188,7 +188,10 @@ pub fn fetch_album_tracks(spotify: &AuthCodeSpotify, album_id: &str) -> Result<V
                 Some(id) => id.to_string(),
                 None => continue,
             };
-            let uri = t["uri"].as_str().unwrap_or_default().to_string();
+            let uri = t["uri"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| format!("spotify:track:{id}"));
             let name = t["name"].as_str().unwrap_or_default().to_string();
             let artists = join_artist_names_json(t);
             tracks.push(ContextTrack {
@@ -253,7 +256,10 @@ pub fn fetch_playlist_tracks(
                 Some(id) => id.to_string(),
                 None => continue,
             };
-            let uri = t["uri"].as_str().unwrap_or_default().to_string();
+            let uri = t["uri"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| format!("spotify:track:{id}"));
             let name = t["name"].as_str().unwrap_or_default().to_string();
             let artists = join_artist_names_json(t);
             tracks.push(ContextTrack {

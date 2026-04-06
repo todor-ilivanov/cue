@@ -109,15 +109,22 @@ enum PlayerMode {
     ContextTracksLoading {
         context_name: String,
         context_target: SearchPlayTarget,
-        category: SearchCategory,
     },
     ContextTracks {
         context_name: String,
         context_target: SearchPlayTarget,
-        category: SearchCategory,
         tracks: Vec<SearchResultEntry>,
         selected: usize,
     },
+}
+
+fn category_for_target(target: &SearchPlayTarget) -> SearchCategory {
+    match target {
+        SearchPlayTarget::Album(_) => SearchCategory::Album,
+        SearchPlayTarget::Playlist(_) => SearchCategory::Playlist,
+        SearchPlayTarget::Artist(_) => SearchCategory::Artist,
+        SearchPlayTarget::Track(_) => SearchCategory::Track,
+    }
 }
 
 fn restore_stashed_results(
@@ -894,12 +901,12 @@ fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
         }
         PlayerMode::ContextTracks {
             context_name,
-            category,
+            context_target,
             tracks,
             selected,
-            ..
         } => {
-            let label = if *category == SearchCategory::Album {
+            let cat = category_for_target(context_target);
+            let label = if cat == SearchCategory::Album {
                 "Album"
             } else {
                 "Playlist"
@@ -907,7 +914,7 @@ fn draw_mode_overlays(frame: &mut Frame, mode: &PlayerMode, show_help: bool) {
             draw_track_list_overlay(
                 frame,
                 &format!("{label}: {context_name}"),
-                category.color(),
+                cat.color(),
                 "play from here",
                 tracks,
                 *selected,
@@ -1209,11 +1216,7 @@ fn run_player_loop(
                     let mut play_target: Option<(SearchPlayTarget, Option<Offset>)> = None;
                     let mut queue_target: Option<SearchResultEntry> = None;
                     let mut fetch_top_tracks: Option<(String, ArtistId<'static>)> = None;
-                    let mut fetch_context_tracks: Option<(
-                        String,
-                        SearchCategory,
-                        SearchPlayTarget,
-                    )> = None;
+                    let mut fetch_context_tracks: Option<(String, SearchPlayTarget)> = None;
                     #[allow(clippy::type_complexity)]
                     let mut start_radio: Option<(
                         Option<String>,
@@ -1478,11 +1481,8 @@ fn run_player_loop(
                                             Some((query.clone(), *category, results.clone(), idx));
                                     }
                                     SearchPlayTarget::Album(_) | SearchPlayTarget::Playlist(_) => {
-                                        fetch_context_tracks = Some((
-                                            entry.title.clone(),
-                                            *category,
-                                            entry.target.clone(),
-                                        ));
+                                        fetch_context_tracks =
+                                            Some((entry.title.clone(), entry.target.clone()));
                                         stashed_context_results =
                                             Some((query.clone(), *category, results.clone(), idx));
                                     }
@@ -1508,11 +1508,8 @@ fn run_player_loop(
                                         }
                                         SearchPlayTarget::Album(_)
                                         | SearchPlayTarget::Playlist(_) => {
-                                            fetch_context_tracks = Some((
-                                                entry.title.clone(),
-                                                *category,
-                                                entry.target.clone(),
-                                            ));
+                                            fetch_context_tracks =
+                                                Some((entry.title.clone(), entry.target.clone()));
                                             stashed_context_results = Some((
                                                 query.clone(),
                                                 *category,
@@ -1651,7 +1648,7 @@ fn run_player_loop(
                     }
 
                     // Handle deferred context tracks fetch (album/playlist)
-                    if let Some((context_name, cat, target)) = fetch_context_tracks {
+                    if let Some((context_name, target)) = fetch_context_tracks {
                         let sp = spotify.clone();
                         let tgt = target.clone();
                         let (tx, rx) = mpsc::channel();
@@ -1659,7 +1656,6 @@ fn run_player_loop(
                         mode = PlayerMode::ContextTracksLoading {
                             context_name,
                             context_target: target,
-                            category: cat,
                         };
                         std::thread::spawn(move || {
                             let result = fetch_context_tracks_entries(&sp, &tgt);
@@ -2008,7 +2004,6 @@ fn run_player_loop(
                     if let PlayerMode::ContextTracksLoading {
                         context_name,
                         context_target,
-                        category,
                     } = &mode
                     {
                         if tracks.is_empty() {
@@ -2022,7 +2017,6 @@ fn run_player_loop(
                             mode = PlayerMode::ContextTracks {
                                 context_name: context_name.clone(),
                                 context_target: context_target.clone(),
-                                category: *category,
                                 tracks,
                                 selected: 0,
                             };
