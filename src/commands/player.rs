@@ -218,30 +218,14 @@ fn build_separator(width: u16) -> Line<'static> {
     ))
 }
 
-fn build_queue_separator(width: u16) -> Line<'static> {
-    let label = " queue ";
+fn build_labeled_separator(label: &str, width: u16) -> Line<'static> {
     let remaining = (width as usize).saturating_sub(label.len());
     let left = remaining / 2;
     let right = remaining - left;
     Line::from(vec![
         Span::styled("─".repeat(left), Style::new().fg(SEPARATOR_COLOR)),
         Span::styled(
-            label,
-            Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-        ),
-        Span::styled("─".repeat(right), Style::new().fg(SEPARATOR_COLOR)),
-    ])
-}
-
-fn build_credits_separator(width: u16) -> Line<'static> {
-    let label = " credits ";
-    let remaining = (width as usize).saturating_sub(label.len());
-    let left = remaining / 2;
-    let right = remaining - left;
-    Line::from(vec![
-        Span::styled("─".repeat(left), Style::new().fg(SEPARATOR_COLOR)),
-        Span::styled(
-            label,
+            label.to_string(),
             Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
         ),
         Span::styled("─".repeat(right), Style::new().fg(SEPARATOR_COLOR)),
@@ -279,13 +263,6 @@ fn credits_lines(credits: &crate::client::TrackCredits) -> Vec<Line<'static>> {
         ]));
     }
 
-    if let Some(ref label) = credits.label {
-        lines.push(Line::from(vec![
-            Span::styled("  Label       ", label_style),
-            Span::styled(label.clone(), value_style),
-        ]));
-    }
-
     if let Some(ref isrc) = credits.isrc {
         lines.push(Line::from(vec![
             Span::styled("  ISRC        ", label_style),
@@ -310,7 +287,7 @@ fn draw_credits(frame: &mut Frame, area: Rect, credits: &crate::client::TrackCre
 
     let sep_area = Rect { height: 1, ..area };
     frame.render_widget(
-        Paragraph::new(build_credits_separator(area.width)),
+        Paragraph::new(build_labeled_separator(" credits ", area.width)),
         sep_area,
     );
 
@@ -355,7 +332,10 @@ fn draw_queue(frame: &mut Frame, area: Rect, ctx: &QueueContext) {
     }
 
     let sep_area = Rect { height: 1, ..area };
-    frame.render_widget(Paragraph::new(build_queue_separator(area.width)), sep_area);
+    frame.render_widget(
+        Paragraph::new(build_labeled_separator(" queue ", area.width)),
+        sep_area,
+    );
 
     let mut y = area.y + 1;
     for entry in &ctx.next {

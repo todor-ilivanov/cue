@@ -150,7 +150,6 @@ pub struct TrackCredits {
     pub album: String,
     pub album_artists: Vec<String>,
     pub release_date: Option<String>,
-    pub label: Option<String>,
     pub copyrights: Vec<String>,
     pub isrc: Option<String>,
 }
@@ -204,8 +203,8 @@ pub fn fetch_track_credits(spotify: &AuthCodeSpotify, track_id: &str) -> Result<
 
     let album_id = track_json["album"]["id"].as_str().unwrap_or_default();
 
-    // Fetch full album for label and copyrights
-    let (label, copyrights) = if !album_id.is_empty() {
+    // Fetch full album for copyrights
+    let copyrights = if !album_id.is_empty() {
         let resp = ureq::get(&format!("https://api.spotify.com/v1/albums/{album_id}"))
             .set("Authorization", &format!("Bearer {access_token}"))
             .call();
@@ -215,22 +214,19 @@ pub fn fetch_track_credits(spotify: &AuthCodeSpotify, track_id: &str) -> Result<
                 let body = resp.into_string().unwrap_or_default();
                 let album_json: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
 
-                let label = album_json["label"].as_str().map(String::from);
-                let copyrights = album_json["copyrights"]
+                album_json["copyrights"]
                     .as_array()
                     .map(|arr| {
                         arr.iter()
                             .filter_map(|c| c["text"].as_str().map(String::from))
                             .collect()
                     })
-                    .unwrap_or_default();
-
-                (label, copyrights)
+                    .unwrap_or_default()
             }
-            Err(_) => (None, Vec::new()),
+            Err(_) => Vec::new(),
         }
     } else {
-        (None, Vec::new())
+        Vec::new()
     };
 
     Ok(TrackCredits {
@@ -238,7 +234,6 @@ pub fn fetch_track_credits(spotify: &AuthCodeSpotify, track_id: &str) -> Result<
         album: album_name,
         album_artists,
         release_date,
-        label,
         copyrights,
         isrc,
     })
