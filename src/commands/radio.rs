@@ -25,17 +25,21 @@ pub fn radio(spotify: &AuthCodeSpotify) -> Result<()> {
 
     let track_id = track.id.context("track has no ID")?;
     let track_id_str = track_id.id().to_string();
-    let artist_id = track
+    let first_artist = track
         .artists
         .first()
-        .and_then(|a| a.id.as_ref())
-        .map(|id| id.id().to_string())
         .context("track has no artist — cannot build radio")?;
+    let artist_id = first_artist
+        .id
+        .as_ref()
+        .map(|id| id.id().to_string())
+        .context("track artist has no ID — cannot build radio")?;
+    let seed_artist_name = first_artist.name.clone();
     let track_name = track.name.clone();
     let artist_name = join_artist_names(&track.artists);
 
     let recommendations = ui::with_spinner("Finding similar tracks...", || {
-        crate::client::fetch_radio_tracks(spotify, &artist_id, &track_id_str, 50)
+        crate::client::fetch_radio_tracks(spotify, &artist_id, &seed_artist_name, &track_id_str, 50)
     })?;
 
     if recommendations.is_empty() {
