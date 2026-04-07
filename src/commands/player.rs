@@ -1812,12 +1812,12 @@ fn run_player_loop(
                     // Handle deferred play action (avoids borrow conflict)
                     if let Some((target, offset)) = play_target {
                         let result = match target {
-                            SearchPlayTarget::Track(id) => spotify.start_uris_playback(
-                                [PlayableId::Track(id)],
-                                None,
-                                None,
-                                None,
-                            ),
+                            SearchPlayTarget::Track(id) => {
+                                let playable = PlayableId::Track(id);
+                                spotify
+                                    .add_item_to_queue(playable, None)
+                                    .and_then(|()| spotify.next_track(None))
+                            }
                             SearchPlayTarget::Album(id) => spotify.start_context_playback(
                                 PlayContextId::Album(id),
                                 None,
