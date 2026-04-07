@@ -775,6 +775,13 @@ fn draw_search_results_overlay(
         SearchCategory::Track => " play  ",
     };
 
+    let overlay_rect = Rect {
+        y: start_y,
+        height: content.y + content.height - start_y,
+        ..content
+    };
+    frame.render_widget(ratatui::widgets::Clear, overlay_rect);
+
     draw_result_list(
         frame, results, selected, accent, start_y, available, content,
     );
@@ -809,8 +816,18 @@ fn draw_track_list_overlay(
     selected: usize,
 ) {
     let content = content_rect(frame.area());
+    let compact = content.height < 10;
+    let top_margin: u16 = if content.height > 12 { 1 } else { 0 };
+    let card_height: u16 = top_margin + 1 + 1 + if compact { 0 } else { 1 } + 1 + 1;
 
-    let header_y = content.y + 1;
+    let header_y = content.y + card_height;
+    let overlay_rect = Rect {
+        y: header_y,
+        height: content.y + content.height - header_y,
+        ..content
+    };
+    frame.render_widget(ratatui::widgets::Clear, overlay_rect);
+
     let header_row = Rect {
         y: header_y,
         height: 1,
