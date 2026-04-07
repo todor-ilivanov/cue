@@ -1,19 +1,67 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Options ---
+
+auto_yes=0
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes) auto_yes=1 ;;
+        -h|--help)
+            echo "Usage: install.sh [--yes]"
+            echo "  -y, --yes    Accept defaults and skip prompts"
+            exit 0
+            ;;
+        *) echo "Unknown option: $arg" >&2; exit 1 ;;
+    esac
+done
+
 # --- Helpers ---
 
 bold=""
 reset=""
+yellow=""
+red=""
 if command -v tput &>/dev/null && [ -t 1 ]; then
     bold=$(tput bold)
     reset=$(tput sgr0)
+    yellow=$(tput setaf 3)
+    red=$(tput setaf 1)
 fi
 
 info()  { echo "${bold}==> $1${reset}"; }
 step()  { echo; info "$1"; }
-warn()  { echo "  warning: $1"; }
-fail()  { echo "  error: $1" >&2; exit 1; }
+warn()  { echo "  ${yellow}warning:${reset} $1"; }
+fail()  { echo "  ${red}error:${reset} $1" >&2; exit 1; }
+
+# Prompt with a default. In --yes mode, returns the default silently.
+ask() {
+    local prompt="$1" default="$2" var="$3"
+    if [ "$auto_yes" = "1" ]; then
+        eval "$var=\"$default\""
+        return
+    fi
+    read -rp "$prompt" reply
+    eval "$var=\"\${reply:-$default}\""
+}
+
+# Prompt for a yes/no. In --yes mode, returns the default.
+confirm() {
+    local prompt="$1" default="$2"
+    if [ "$auto_yes" = "1" ]; then
+        [ "$default" = "Y" ]
+        return
+    fi
+    local reply
+    read -rp "$prompt" reply
+    case "${reply:-$default}" in
+        [Yy]*|"") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+cleanup=""
+trap 'if [ -n "$cleanup" ]; then rm -f "$cleanup"; fi' EXIT
 
 # --- Detect existing installation ---
 
@@ -40,15 +88,13 @@ step "Checking prerequisites"
 
 if ! command -v cargo &>/dev/null; then
     echo "  Rust is not installed."
-    read -rp "  Install Rust via rustup? [Y/n] " ans
-    case "${ans:-Y}" in
-        [Yy]*|"")
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            # shellcheck source=/dev/null
-            source "$HOME/.cargo/env"
-            ;;
-        *) fail "cargo is required to build cue" ;;
-    esac
+    if confirm "  Install Rust via rustup? [Y/n] " Y; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        # shellcheck source=/dev/null
+        source "$HOME/.cargo/env"
+    else
+        fail "cargo is required to build cue"
+    fi
 fi
 
 echo "  cargo: $(cargo --version)"
@@ -64,30 +110,38 @@ fi
 cargo build --release
 echo "  Build complete."
 
+binary="$PWD/target/release/cue"
+if ! "$binary" --version &>/dev/null; then
+    fail "Built binary failed to run. Check build output above."
+fi
+
 # --- Install binary ---
 
 step "Installing binary"
 
-binary="$PWD/target/release/cue"
+cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
 
 if [ "$upgrading" = "1" ]; then
     default_dir=$(dirname "$existing_path")
-elif [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" == *":$HOME/.cargo/bin:"* ]]; then
-    default_dir="$HOME/.cargo/bin"
+elif [ -d "$cargo_bin" ] && [[ ":$PATH:" == *":$cargo_bin:"* ]]; then
+    default_dir="$cargo_bin"
 else
     default_dir="$HOME/.local/bin"
 fi
 
-read -rp "  Install to [$default_dir]: " install_dir
-install_dir="${install_dir:-$default_dir}"
+ask "  Install to [$default_dir]: " "$default_dir" install_dir
 install_dir="${install_dir/#\~/$HOME}"
 
 mkdir -p "$install_dir"
 if [ -f "$install_dir/cue" ]; then
     echo "  Replacing existing binary at $install_dir/cue"
 fi
-cp "$binary" "$install_dir/cue"
-chmod 755 "$install_dir/cue"
+tmpbin=$(mktemp "$install_dir/cue.XXXXXX")
+cleanup="$tmpbin"
+cp "$binary" "$tmpbin"
+chmod 755 "$tmpbin"
+mv "$tmpbin" "$install_dir/cue"
+cleanup=""
 echo "  Installed to $install_dir/cue"
 
 if command -v cue &>/dev/null; then
@@ -98,20 +152,24 @@ if command -v cue &>/dev/null; then
     fi
 fi
 
-if [[ ":$PATH:" != *":$install_dir:"* ]]; then
-    warn "$install_dir is not in your PATH"
+detect_shell_rc() {
     case "$OSTYPE" in
-        darwin*) shell_rc="$HOME/.zshrc" ;;
+        darwin*) echo "$HOME/.zshrc" ;;
         *)
             if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "${SHELL:-}")" = "zsh" ]; then
-                shell_rc="${ZDOTDIR:-$HOME}/.zshrc"
+                echo "${ZDOTDIR:-$HOME}/.zshrc"
             elif [ -f "$HOME/.bashrc" ]; then
-                shell_rc="$HOME/.bashrc"
+                echo "$HOME/.bashrc"
             else
-                shell_rc="$HOME/.profile"
+                echo "$HOME/.profile"
             fi
             ;;
     esac
+}
+
+if [[ ":$PATH:" != *":$install_dir:"* ]]; then
+    warn "$install_dir is not in your PATH"
+    shell_rc=$(detect_shell_rc)
     echo "  Add it to your $shell_rc:"
     echo "    echo 'export PATH=\"$install_dir:\$PATH\"' >> $shell_rc"
 fi
@@ -134,12 +192,17 @@ if [ -f "$config_file" ]; then
         echo "  Keeping existing config."
         write_config=0
     else
-        read -rp "  Overwrite? [y/N] " overwrite
-        case "${overwrite:-N}" in
-            [Yy]*) ;;
-            *) echo "  Keeping existing config."; write_config=0 ;;
-        esac
+        if ! confirm "  Overwrite? [y/N] " N; then
+            echo "  Keeping existing config."
+            write_config=0
+        fi
     fi
+fi
+
+if [ "$write_config" = "1" ] && [ "$auto_yes" = "1" ]; then
+    warn "Skipping credential setup in --yes mode."
+    echo "  Run install.sh again without --yes to configure, or edit $config_file manually."
+    write_config=0
 fi
 
 if [ "$write_config" = "1" ]; then
@@ -186,41 +249,38 @@ step "Shell completions"
 
 cue_bin="$install_dir/cue"
 
-read -rp "  Generate shell completions? [Y/n] " gen_completions
-case "${gen_completions:-Y}" in
-    [Yy]*|"")
-        echo "  Shells: bash, zsh, fish"
-        read -rp "  Shell [bash]: " shell_choice
-        shell_choice="${shell_choice:-bash}"
+if confirm "  Generate shell completions? [Y/n] " Y; then
+    echo "  Shells: bash, zsh, fish"
+    ask "  Shell [bash]: " "bash" shell_choice
 
-        case "$shell_choice" in
-            bash)
-                comp_file="$HOME/.local/share/bash-completion/completions/cue"
-                mkdir -p "${comp_file%/*}"
-                "$cue_bin" completions bash > "$comp_file"
-                echo "  Written to $comp_file"
-                echo "  Run: source $comp_file"
-                ;;
-            zsh)
-                comp_dir="${ZDOTDIR:-$HOME}/.zfunc"
-                mkdir -p "$comp_dir"
-                "$cue_bin" completions zsh > "$comp_dir/_cue"
-                echo "  Written to $comp_dir/_cue"
-                echo "  Ensure $comp_dir is in your fpath and run: compinit"
-                ;;
-            fish)
-                comp_dir="$HOME/.config/fish/completions"
-                mkdir -p "$comp_dir"
-                "$cue_bin" completions fish > "$comp_dir/cue.fish"
-                echo "  Written to $comp_dir/cue.fish"
-                ;;
-            *)
-                warn "Unknown shell: $shell_choice (skipping)"
-                ;;
-        esac
-        ;;
-    *) echo "  Skipped." ;;
-esac
+    case "$shell_choice" in
+        bash)
+            comp_file="$HOME/.local/share/bash-completion/completions/cue"
+            mkdir -p "${comp_file%/*}"
+            "$cue_bin" completions bash > "$comp_file"
+            echo "  Written to $comp_file"
+            echo "  Run: source $comp_file"
+            ;;
+        zsh)
+            comp_dir="${ZDOTDIR:-$HOME}/.zfunc"
+            mkdir -p "$comp_dir"
+            "$cue_bin" completions zsh > "$comp_dir/_cue"
+            echo "  Written to $comp_dir/_cue"
+            echo "  Ensure $comp_dir is in your fpath and run: compinit"
+            ;;
+        fish)
+            comp_dir="$HOME/.config/fish/completions"
+            mkdir -p "$comp_dir"
+            "$cue_bin" completions fish > "$comp_dir/cue.fish"
+            echo "  Written to $comp_dir/cue.fish"
+            ;;
+        *)
+            warn "Unknown shell: $shell_choice (skipping)"
+            ;;
+    esac
+else
+    echo "  Skipped."
+fi
 
 # --- Authenticate ---
 
@@ -230,18 +290,14 @@ if [ "$upgrading" = "1" ]; then
 else
     step "Authentication"
 
-    read -rp "  Authenticate with Spotify now? [Y/n] " do_auth
-    case "${do_auth:-Y}" in
-        [Yy]*|"")
-            echo "  Running: cue devices"
-            echo "  Your browser will open for Spotify authorization."
-            echo
-            "$cue_bin" devices || warn "Authentication did not complete. Run 'cue devices' later to retry."
-            ;;
-        *)
-            echo "  Skipped. Run any cue command later to trigger authentication."
-            ;;
-    esac
+    if [ "$auto_yes" = "0" ] && confirm "  Authenticate with Spotify now? [Y/n] " Y; then
+        echo "  Running: cue devices"
+        echo "  Your browser will open for Spotify authorization."
+        echo
+        "$cue_bin" devices || warn "Authentication did not complete. Run 'cue devices' later to retry."
+    else
+        echo "  Skipped. Run any cue command later to trigger authentication."
+    fi
 fi
 
 # --- Done ---
@@ -251,6 +307,8 @@ if [ "$upgrading" = "1" ]; then
 else
     step "Setup complete"
 fi
+
+echo "  $("$cue_bin" --version 2>/dev/null || echo "cue installed")"
 echo
 echo "  Quick start:"
 echo "    cue devices          List available devices"
