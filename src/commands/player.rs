@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use rspotify::model::{
-    AlbumId, ArtistId, Offset, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult,
-    SearchType, TrackId,
+    AlbumId, Offset, PlayContextId, PlayableId, PlayableItem, PlaylistId, SearchResult, SearchType,
+    TrackId,
 };
 use rspotify::prelude::*;
 use rspotify::AuthCodeSpotify;
@@ -72,7 +72,7 @@ enum SearchPlayTarget {
     Track(TrackId<'static>),
     Album(AlbumId<'static>),
     Playlist(PlaylistId<'static>),
-    Artist(ArtistId<'static>),
+    Artist,
 }
 
 #[derive(Clone)]
@@ -122,7 +122,7 @@ fn category_for_target(target: &SearchPlayTarget) -> SearchCategory {
     match target {
         SearchPlayTarget::Album(_) => SearchCategory::Album,
         SearchPlayTarget::Playlist(_) => SearchCategory::Playlist,
-        SearchPlayTarget::Artist(_) => SearchCategory::Artist,
+        SearchPlayTarget::Artist => SearchCategory::Artist,
         SearchPlayTarget::Track(_) => SearchCategory::Track,
     }
 }
@@ -641,7 +641,7 @@ fn perform_artist_search(
             } else {
                 a.genres.into_iter().take(3).collect::<Vec<_>>().join(", ")
             },
-            target: SearchPlayTarget::Artist(a.id),
+            target: SearchPlayTarget::Artist,
         })
         .collect();
 
@@ -1323,7 +1323,7 @@ fn run_player_loop(
                     let mut submit_search: Option<(String, SearchCategory)> = None;
                     let mut play_target: Option<(SearchPlayTarget, Option<Offset>)> = None;
                     let mut queue_target: Option<SearchResultEntry> = None;
-                    let mut fetch_top_tracks: Option<(String, ArtistId<'static>)> = None;
+                    let mut fetch_top_tracks: Option<String> = None;
                     let mut fetch_context_tracks: Option<(String, SearchPlayTarget)> = None;
                     #[allow(clippy::type_complexity)]
                     let mut start_radio: Option<(
@@ -1604,8 +1604,8 @@ fn run_player_loop(
                                 let idx = *selected;
                                 let entry = &results[idx];
                                 match entry.target {
-                                    SearchPlayTarget::Artist(ref id) => {
-                                        fetch_top_tracks = Some((entry.title.clone(), id.clone()));
+                                    SearchPlayTarget::Artist => {
+                                        fetch_top_tracks = Some(entry.title.clone());
                                         stashed_artist_results =
                                             Some((query.clone(), *category, results.clone(), idx));
                                     }
@@ -1625,9 +1625,8 @@ fn run_player_loop(
                                 if idx < results.len() {
                                     let entry = &results[idx];
                                     match entry.target {
-                                        SearchPlayTarget::Artist(ref id) => {
-                                            fetch_top_tracks =
-                                                Some((entry.title.clone(), id.clone()));
+                                        SearchPlayTarget::Artist => {
+                                            fetch_top_tracks = Some(entry.title.clone());
                                             stashed_artist_results = Some((
                                                 query.clone(),
                                                 *category,
@@ -1763,7 +1762,7 @@ fn run_player_loop(
                     }
 
                     // Handle deferred artist top tracks fetch
-                    if let Some((artist_name, _artist_id)) = fetch_top_tracks {
+                    if let Some(artist_name) = fetch_top_tracks {
                         let sp = spotify.clone();
                         let name = artist_name.clone();
                         let (tx, rx) = mpsc::channel();
@@ -1814,7 +1813,7 @@ fn run_player_loop(
                                 offset,
                                 None,
                             ),
-                            SearchPlayTarget::Artist(_) => unreachable!(
+                            SearchPlayTarget::Artist => unreachable!(
                                 "artist targets are routed to fetch_top_tracks, not play"
                             ),
                         };
@@ -1864,7 +1863,7 @@ fn run_player_loop(
                             }
                             SearchPlayTarget::Album(_)
                             | SearchPlayTarget::Playlist(_)
-                            | SearchPlayTarget::Artist(_) => {
+                            | SearchPlayTarget::Artist => {
                                 status_message = Some((
                                     "Only tracks can be added to queue".to_string(),
                                     Instant::now(),
