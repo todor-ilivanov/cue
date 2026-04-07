@@ -654,9 +654,9 @@ fn perform_artist_search(
 
 fn fetch_artist_top_tracks_entries(
     spotify: &AuthCodeSpotify,
-    artist_id: &str,
+    artist_name: &str,
 ) -> Result<Vec<SearchResultEntry>, String> {
-    let tracks = crate::client::fetch_artist_top_tracks_full(spotify, artist_id)
+    let tracks = crate::client::fetch_artist_top_tracks_full(spotify, artist_name)
         .map_err(|e| format!("failed to fetch top tracks: {e}"))?;
 
     Ok(tracks
@@ -1763,14 +1763,14 @@ fn run_player_loop(
                     }
 
                     // Handle deferred artist top tracks fetch
-                    if let Some((artist_name, artist_id)) = fetch_top_tracks {
+                    if let Some((artist_name, _artist_id)) = fetch_top_tracks {
                         let sp = spotify.clone();
-                        let aid = artist_id.id().to_string();
+                        let name = artist_name.clone();
                         let (tx, rx) = mpsc::channel();
                         artist_rx = Some(rx);
                         mode = PlayerMode::ArtistTopTracksLoading { artist_name };
                         std::thread::spawn(move || {
-                            let result = fetch_artist_top_tracks_entries(&sp, &aid);
+                            let result = fetch_artist_top_tracks_entries(&sp, &name);
                             let _ = tx.send(result);
                         });
                         needs_redraw = true;
@@ -1882,7 +1882,7 @@ fn run_player_loop(
                         match (tid, aid) {
                             (Some(track_id), Some(artist_id)) => {
                                 match crate::client::fetch_radio_tracks(
-                                    spotify, &artist_id, &track_id, 50,
+                                    spotify, &artist_id, &artist, &track_id, 50,
                                 ) {
                                     Ok(recs) if recs.is_empty() => {
                                         status_message = Some((

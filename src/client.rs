@@ -379,7 +379,7 @@ pub struct RadioTrack {
     pub id: String,
 }
 
-fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<String>> {
+fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<(String, String)>> {
     let resp = ureq::get(&format!(
         "https://api.spotify.com/v1/artists/{artist_id}/related-artists"
     ))
@@ -399,7 +399,11 @@ fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<Stri
 
     Ok(artists
         .iter()
-        .filter_map(|a| a["id"].as_str().map(String::from))
+        .filter_map(|a| {
+            let id = a["id"].as_str()?.to_string();
+            let name = a["name"].as_str()?.to_string();
+            Some((id, name))
+        })
         .collect())
 }
 
@@ -410,24 +414,25 @@ pub struct ArtistTopTrack {
     pub artists: String,
 }
 
-fn fetch_artist_top_tracks_raw(access_token: &str, artist_id: &str) -> Result<Vec<ArtistTopTrack>> {
-    let resp = ureq::get(&format!(
-        "https://api.spotify.com/v1/artists/{artist_id}/top-tracks"
-    ))
-    .set("Authorization", &format!("Bearer {access_token}"))
-    .query("market", "US")
-    .call()
-    .context("failed to fetch artist top tracks")?;
+fn search_artist_tracks(access_token: &str, artist_name: &str) -> Result<Vec<ArtistTopTrack>> {
+    let resp = ureq::get("https://api.spotify.com/v1/search")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .query("q", &format!("artist:{artist_name}"))
+        .query("type", "track")
+        .query("limit", "10")
+        .query("market", "US")
+        .call()
+        .context("failed to search for artist tracks")?;
 
     let body = resp
         .into_string()
-        .context("failed to read top tracks response")?;
+        .context("failed to read search response")?;
     let json: serde_json::Value =
-        serde_json::from_str(&body).context("failed to parse top tracks response")?;
+        serde_json::from_str(&body).context("failed to parse search response")?;
 
-    let tracks = json["tracks"]
+    let tracks = json["tracks"]["items"]
         .as_array()
-        .context("top tracks response missing tracks array")?;
+        .context("search response missing tracks.items array")?;
 
     Ok(tracks
         .iter()
@@ -443,14 +448,14 @@ fn fetch_artist_top_tracks_raw(access_token: &str, artist_id: &str) -> Result<Ve
 /// Fetch an artist's top tracks with full metadata (name + artists).
 pub fn fetch_artist_top_tracks_full(
     spotify: &AuthCodeSpotify,
-    artist_id: &str,
+    artist_name: &str,
 ) -> Result<Vec<ArtistTopTrack>> {
     let access_token = get_access_token(spotify)?;
-    fetch_artist_top_tracks_raw(&access_token, artist_id)
+    search_artist_tracks(&access_token, artist_name)
 }
 
-fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<RadioTrack>> {
-    Ok(fetch_artist_top_tracks_raw(access_token, artist_id)?
+fn fetch_artist_top_tracks(access_token: &str, artist_name: &str) -> Result<Vec<RadioTrack>> {
+    Ok(search_artist_tracks(access_token, artist_name)?
         .into_iter()
         .map(|t| RadioTrack { id: t.id })
         .collect())
@@ -461,6 +466,7 @@ fn fetch_artist_top_tracks(access_token: &str, artist_id: &str) -> Result<Vec<Ra
 pub fn fetch_radio_tracks(
     spotify: &AuthCodeSpotify,
     artist_id: &str,
+    artist_name: &str,
     exclude_track_id: &str,
     limit: usize,
 ) -> Result<Vec<RadioTrack>> {
@@ -468,12 +474,12 @@ pub fn fetch_radio_tracks(
     let related = fetch_related_artists(&access_token, artist_id)?;
 
     // Seed artist + up to 7 related artists = up to 80 candidate tracks
-    let mut artist_ids: Vec<String> = vec![artist_id.to_string()];
-    artist_ids.extend(related.into_iter().take(7));
+    let mut artists: Vec<String> = vec![artist_name.to_string()];
+    artists.extend(related.into_iter().take(7).map(|(_, name)| name));
 
     let mut buckets: Vec<Vec<RadioTrack>> = Vec::new();
-    for aid in &artist_ids {
-        if let Ok(tracks) = fetch_artist_top_tracks(&access_token, aid) {
+    for name in &artists {
+        if let Ok(tracks) = fetch_artist_top_tracks(&access_token, name) {
             if !tracks.is_empty() {
                 buckets.push(tracks);
             }
