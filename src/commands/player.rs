@@ -233,6 +233,110 @@ fn build_queue_separator(width: u16) -> Line<'static> {
     ])
 }
 
+fn build_credits_separator(width: u16) -> Line<'static> {
+    let label = " credits ";
+    let remaining = (width as usize).saturating_sub(label.len());
+    let left = remaining / 2;
+    let right = remaining - left;
+    Line::from(vec![
+        Span::styled("─".repeat(left), Style::new().fg(SEPARATOR_COLOR)),
+        Span::styled(
+            label,
+            Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ),
+        Span::styled("─".repeat(right), Style::new().fg(SEPARATOR_COLOR)),
+    ])
+}
+
+fn credits_lines(credits: &crate::client::TrackCredits) -> Vec<Line<'static>> {
+    let label_style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+    let value_style = Style::new().fg(Color::DarkGray);
+    let mut lines = Vec::new();
+
+    if !credits.performers.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  Performers  ", label_style),
+            Span::styled(credits.performers.join(", "), value_style),
+        ]));
+    }
+
+    if !credits.album.is_empty() {
+        let mut parts = vec![
+            Span::styled("  Album       ", label_style),
+            Span::styled(credits.album.clone(), value_style),
+        ];
+        if let Some(ref date) = credits.release_date {
+            let year = date.get(..4).unwrap_or(date);
+            parts.push(Span::styled(format!(" ({year})"), label_style));
+        }
+        lines.push(Line::from(parts));
+    }
+
+    if credits.album_artists != credits.performers && !credits.album_artists.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("  Album by    ", label_style),
+            Span::styled(credits.album_artists.join(", "), value_style),
+        ]));
+    }
+
+    if let Some(ref label) = credits.label {
+        lines.push(Line::from(vec![
+            Span::styled("  Label       ", label_style),
+            Span::styled(label.clone(), value_style),
+        ]));
+    }
+
+    if let Some(ref isrc) = credits.isrc {
+        lines.push(Line::from(vec![
+            Span::styled("  ISRC        ", label_style),
+            Span::styled(isrc.clone(), value_style),
+        ]));
+    }
+
+    for copyright in &credits.copyrights {
+        lines.push(Line::from(vec![
+            Span::styled("  ", label_style),
+            Span::styled(copyright.clone(), label_style),
+        ]));
+    }
+
+    lines
+}
+
+fn draw_credits(frame: &mut Frame, area: Rect, credits: &crate::client::TrackCredits) {
+    if area.height == 0 {
+        return;
+    }
+
+    let sep_area = Rect { height: 1, ..area };
+    frame.render_widget(
+        Paragraph::new(build_credits_separator(area.width)),
+        sep_area,
+    );
+
+    let lines = credits_lines(credits);
+    let content_area = Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+    for (i, line) in lines.iter().enumerate() {
+        if i as u16 >= content_area.height {
+            break;
+        }
+        let row = Rect {
+            y: content_area.y + i as u16,
+            height: 1,
+            ..content_area
+        };
+        frame.render_widget(Paragraph::new(line.clone()), row);
+    }
+}
+
+fn credits_height(credits: &crate::client::TrackCredits) -> u16 {
+    1 + credits_lines(credits).len() as u16
+}
+
 fn queue_entry_line(entry: &SongEntry) -> Line<'_> {
     Line::from(vec![
         Span::styled("  ", Style::new()),
@@ -287,6 +391,7 @@ fn draw_playing(
     show_lyrics: bool,
     lyrics_scroll_center: Option<usize>,
     queue_context: Option<&QueueContext>,
+    credits: Option<&crate::client::TrackCredits>,
     status_message: Option<(&str, Color)>,
 ) {
     let content_area = content_rect(frame.area());
@@ -339,6 +444,15 @@ fn draw_playing(
         None
     };
 
+    // Credits section (separator + rows)
+    let credits_row = if let Some(c) = credits {
+        let r = constraints.len();
+        constraints.push(Constraint::Length(credits_height(c)));
+        Some(r)
+    } else {
+        None
+    };
+
     let lyrics_row = constraints.len();
     constraints.push(Constraint::Min(0)); // lyrics or spacer
     constraints.push(Constraint::Length(1)); // blank line above hints
@@ -384,6 +498,13 @@ fn draw_playing(
     if let Some(qr) = queue_row {
         if let Some(ctx) = queue_context {
             draw_queue(frame, rows[qr], ctx);
+        }
+    }
+
+    // Credits
+    if let Some(cr) = credits_row {
+        if let Some(c) = credits {
+            draw_credits(frame, rows[cr], c);
         }
     }
 
@@ -1047,6 +1168,7 @@ fn draw_help_overlay(frame: &mut Frame) {
         ("l", "Toggle lyrics"),
         ("j / k", "Scroll lyrics"),
         ("s", "Sync lyrics to playback"),
+        ("c", "Toggle credits"),
         ("q", "Toggle queue"),
         ("/", "Search tracks, albums, playlists"),
         ("a", "Queue track from search results"),
@@ -1174,6 +1296,12 @@ fn run_player_loop(
     let mut show_help = false;
     let mut queue_context: Option<QueueContext> = None;
 
+    // Credits state
+    let mut show_credits = false;
+    let mut credits_data: Option<crate::client::TrackCredits> = None;
+    let mut credits_rx: Option<mpsc::Receiver<Option<crate::client::TrackCredits>>> = None;
+    let mut credits_track_id: Option<String> = None;
+
     // Search state
     let mut mode = PlayerMode::Normal;
     let mut search_rx: Option<mpsc::Receiver<Result<Vec<SearchResultEntry>, String>>> = None;
@@ -1240,6 +1368,27 @@ fn run_player_loop(
                                 if show_queue && queue_context.is_none() {
                                     if let Ok(ctx) = fetch_queue_context(spotify, 0, 5) {
                                         queue_context = Some(ctx);
+                                    }
+                                }
+                                needs_redraw = true;
+                            }
+                            KeyCode::Char('c') => {
+                                show_credits = !show_credits;
+                                if show_credits && credits_data.is_none() {
+                                    if let Some(ref t) = info {
+                                        if let Some(ref tid) = t.track_id {
+                                            let sp = spotify.clone();
+                                            let tid = tid.clone();
+                                            let (tx, rx) = mpsc::channel();
+                                            credits_rx = Some(rx);
+                                            credits_track_id = Some(tid.clone());
+                                            std::thread::spawn(move || {
+                                                let result =
+                                                    crate::client::fetch_track_credits(&sp, &tid)
+                                                        .ok();
+                                                let _ = tx.send(result);
+                                            });
+                                        }
                                     }
                                 }
                                 needs_redraw = true;
@@ -1895,6 +2044,24 @@ fn run_player_loop(
                         };
                         let _ = tx.send(state);
                     });
+
+                    // Re-fetch credits when the track changes.
+                    let new_tid = track.track_id.clone();
+                    if new_tid != credits_track_id {
+                        credits_data = None;
+                        credits_track_id = new_tid.clone();
+                        if show_credits {
+                            if let Some(tid) = new_tid {
+                                let sp = spotify.clone();
+                                let (tx, rx) = mpsc::channel();
+                                credits_rx = Some(rx);
+                                std::thread::spawn(move || {
+                                    let _ =
+                                        tx.send(crate::client::fetch_track_credits(&sp, &tid).ok());
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1910,6 +2077,22 @@ fn run_player_loop(
                 Err(mpsc::TryRecvError::Disconnected) => {
                     lyrics_state = LyricsState::None;
                     lyrics_rx = None;
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        // Check for credits fetch result.
+        if let Some(ref rx) = credits_rx {
+            match rx.try_recv() {
+                Ok(data) => {
+                    credits_data = data;
+                    credits_rx = None;
+                    needs_redraw = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    credits_rx = None;
                     needs_redraw = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -2072,20 +2255,25 @@ fn run_player_loop(
                     || last_drawn.as_ref() != Some(&state)
                     || !matches!(mode, PlayerMode::Normal)
                 {
-                    // Suppress lyrics/queue during search modes
-                    let (effective_lyrics, effective_queue) = if matches!(mode, PlayerMode::Normal)
-                    {
-                        (
-                            show_lyrics,
-                            if show_queue {
-                                queue_context.as_ref()
-                            } else {
-                                None
-                            },
-                        )
-                    } else {
-                        (false, None)
-                    };
+                    // Suppress lyrics/queue/credits during search modes
+                    let (effective_lyrics, effective_queue, effective_credits) =
+                        if matches!(mode, PlayerMode::Normal) {
+                            (
+                                show_lyrics,
+                                if show_queue {
+                                    queue_context.as_ref()
+                                } else {
+                                    None
+                                },
+                                if show_credits {
+                                    credits_data.as_ref()
+                                } else {
+                                    None
+                                },
+                            )
+                        } else {
+                            (false, None, None)
+                        };
 
                     terminal.draw(|frame| {
                         draw_playing(
@@ -2096,6 +2284,7 @@ fn run_player_loop(
                             effective_lyrics,
                             lyrics_scroll_center,
                             effective_queue,
+                            effective_credits,
                             status_message
                                 .as_ref()
                                 .map(|(msg, _, color)| (msg.as_str(), *color)),
