@@ -42,11 +42,12 @@ cue pause                 Pause playback
 cue resume                Resume playback
 cue next / prev           Skip forward or back
 cue now                   Show what's currently playing
-cue player                Live player with lyrics, progress bar, keyboard controls
-cue search <query>        Search for tracks or albums (--album)
+cue player                Live player with lyrics, progress bar, keyboard controls (--slim to hide lyrics)
+cue search <query>        Search for tracks, albums (--album), or artists (--artist)
 cue devices               List available devices
 cue device [name]         Show active device, or transfer to one by name
 cue volume [level]        Show or set volume (0-100, +N, -N)
+cue radio                 Start a radio based on the currently playing track
 cue queue [query]         Show the queue, or add a track to it
 cue completions <shell>   Generate shell completions (bash, zsh, fish)
 ```
