@@ -17,10 +17,21 @@ fail()  { echo "  error: $1" >&2; exit 1; }
 
 # --- Detect existing installation ---
 
+is_our_cue() {
+    "$1" --help 2>&1 | head -1 | grep -q "Spotify remote control"
+}
+
 upgrading=0
+existing_path=""
 if command -v cue &>/dev/null; then
-    existing_version=$(cue --version 2>/dev/null || echo "unknown")
-    upgrading=1
+    candidate=$(command -v cue)
+    if is_our_cue "$candidate"; then
+        existing_path="$candidate"
+        existing_version=$("$candidate" --version 2>/dev/null || echo "unknown")
+        upgrading=1
+    else
+        warn "Found '$candidate' but it is not cue (Spotify). Installing alongside it."
+    fi
 fi
 
 # --- Prerequisites ---
@@ -59,24 +70,12 @@ step "Installing binary"
 
 binary="$PWD/target/release/cue"
 
-case "$OSTYPE" in
-    darwin*)
-        if [[ ":$PATH:" == *":/opt/homebrew/bin:"* ]]; then
-            default_dir="/opt/homebrew/bin"
-        else
-            default_dir="/usr/local/bin"
-        fi
-        ;;
-    *)
-        default_dir="$HOME/.local/bin"
-        ;;
-esac
-
 if [ "$upgrading" = "1" ]; then
-    existing_path=$(command -v cue)
     default_dir=$(dirname "$existing_path")
 elif [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" == *":$HOME/.cargo/bin:"* ]]; then
     default_dir="$HOME/.cargo/bin"
+else
+    default_dir="$HOME/.local/bin"
 fi
 
 read -rp "  Install to [$default_dir]: " install_dir
@@ -90,6 +89,14 @@ fi
 cp "$binary" "$install_dir/cue"
 chmod 755 "$install_dir/cue"
 echo "  Installed to $install_dir/cue"
+
+if command -v cue &>/dev/null; then
+    resolved=$(command -v cue)
+    if [ "$resolved" != "$install_dir/cue" ]; then
+        warn "Another 'cue' exists at $resolved and takes precedence in PATH"
+        warn "Ensure $install_dir comes before $(dirname "$resolved") in your PATH"
+    fi
+fi
 
 if [[ ":$PATH:" != *":$install_dir:"* ]]; then
     warn "$install_dir is not in your PATH"
