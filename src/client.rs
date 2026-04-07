@@ -144,6 +144,101 @@ fn join_artist_names_json(value: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// Credit information for a track (assembled from track + album endpoints).
+pub struct TrackCredits {
+    pub performers: Vec<String>,
+    pub album: String,
+    pub album_artists: Vec<String>,
+    pub release_date: Option<String>,
+    pub copyrights: Vec<String>,
+    pub isrc: Option<String>,
+}
+
+/// Fetch credit information for a track by combining track and album details.
+pub fn fetch_track_credits(spotify: &AuthCodeSpotify, track_id: &str) -> Result<TrackCredits> {
+    let access_token = get_access_token(spotify)?;
+
+    // Fetch full track to get album ID, ISRC, and artist list
+    let resp = ureq::get(&format!("https://api.spotify.com/v1/tracks/{track_id}"))
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .call()
+        .context("failed to fetch track details")?;
+
+    let body = resp
+        .into_string()
+        .context("failed to read track response")?;
+    let track_json: serde_json::Value =
+        serde_json::from_str(&body).context("failed to parse track response")?;
+
+    let performers: Vec<String> = track_json["artists"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let album_name = track_json["album"]["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    let album_artists: Vec<String> = track_json["album"]["artists"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let release_date = track_json["album"]["release_date"]
+        .as_str()
+        .map(String::from);
+
+    let isrc = track_json["external_ids"]["isrc"]
+        .as_str()
+        .map(String::from);
+
+    let album_id = track_json["album"]["id"].as_str().unwrap_or_default();
+
+    // Fetch full album for copyrights
+    let copyrights = if !album_id.is_empty() {
+        let resp = ureq::get(&format!("https://api.spotify.com/v1/albums/{album_id}"))
+            .set("Authorization", &format!("Bearer {access_token}"))
+            .call();
+
+        match resp {
+            Ok(resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                let album_json: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+
+                album_json["copyrights"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|c| c["text"].as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok(TrackCredits {
+        performers,
+        album: album_name,
+        album_artists,
+        release_date,
+        copyrights,
+        isrc,
+    })
+}
+
 /// A track within an album or playlist context.
 pub struct ContextTrack {
     pub id: String,
