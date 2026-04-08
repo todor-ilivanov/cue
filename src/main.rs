@@ -8,7 +8,7 @@ mod lyrics;
 mod ui;
 
 #[derive(Parser)]
-#[command(name = "cue", about = "A command-line Spotify remote control")]
+#[command(name = "cue", about = "A command-line Spotify remote control", version)]
 #[command(after_help = "\
 Examples:
   cue play starboy
