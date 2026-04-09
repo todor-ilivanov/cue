@@ -16,46 +16,48 @@ for arg in "$@"; do
     esac
 done
 
-# --- Helpers ---
+# --- Terminal styling ---
 
-bold=""
-reset=""
-yellow=""
-red=""
-if command -v tput &>/dev/null && [ -t 1 ]; then
-    bold=$(tput bold)
-    reset=$(tput sgr0)
-    yellow=$(tput setaf 3)
+green="" red="" yellow="" bold="" dim="" reset=""
+spinner_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+if [ -t 1 ] && command -v tput &>/dev/null; then
+    green=$(tput setaf 2)
     red=$(tput setaf 1)
+    yellow=$(tput setaf 3)
+    bold=$(tput bold)
+    dim=$(tput dim 2>/dev/null || true)
+    reset=$(tput sgr0)
 fi
 
-info()  { echo "${bold}==> $1${reset}"; }
-step()  { echo; info "$1"; }
-warn()  { echo "  ${yellow}warning:${reset} $1"; }
-fail()  { echo "  ${red}error:${reset} $1" >&2; exit 1; }
+ok()     { echo "  ${green}✓${reset} $1"; }
+err()    { echo "  ${red}✗${reset} $1" >&2; }
+warn()   { echo "  ${yellow}!${reset} $1"; }
+step()   { echo; echo "${bold}$1${reset}"; }
+detail() { echo "    ${dim}$1${reset}"; }
 
-# Prompt with a default. In --yes mode, returns the default silently.
-ask() {
-    local prompt="$1" default="$2" var="$3"
-    if [ "$auto_yes" = "1" ]; then
-        eval "$var=\"$default\""
-        return
-    fi
-    read -rp "$prompt" reply
-    eval "$var=\"\${reply:-$default}\""
+fail() { err "$1"; exit 1; }
+
+spin() {
+    local pid=$1 msg=$2
+    local i=0 len=${#spinner_chars}
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r  %s %s" "${spinner_chars:i%len:1}" "$msg"
+        i=$((i + 1))
+        sleep 0.08
+    done
+    printf "\r\033[2K"
 }
 
-# Prompt for a yes/no. In --yes mode, returns the default.
 confirm() {
-    local prompt="$1" default="$2"
+    local prompt=$1 default=$2
     if [ "$auto_yes" = "1" ]; then
         [ "$default" = "Y" ]
         return
     fi
     local reply
-    read -rp "$prompt" reply
+    read -rp "  $prompt" reply
     case "${reply:-$default}" in
-        [Yy]*|"") return 0 ;;
+        [Yy]*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -84,11 +86,11 @@ fi
 
 # --- Prerequisites ---
 
-step "Checking prerequisites"
+step "Checking prerequisites..."
 
 if ! command -v cargo &>/dev/null; then
-    echo "  Rust is not installed."
-    if confirm "  Install Rust via rustup? [Y/n] " Y; then
+    warn "Rust is not installed"
+    if confirm "Install Rust via rustup? [Y/n] " Y; then
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         # shellcheck source=/dev/null
         source "$HOME/.cargo/env"
@@ -97,86 +99,92 @@ if ! command -v cargo &>/dev/null; then
     fi
 fi
 
-echo "  cargo: $(cargo --version)"
+ok "cargo $(cargo --version | awk '{print $2}')"
 
 # --- Build ---
 
 if [ "$upgrading" = "1" ]; then
-    step "Upgrading cue (current: $existing_version)"
+    step "Building cue (current: $existing_version)..."
 else
-    step "Building cue"
+    step "Building cue..."
 fi
 
-cargo build --release
-echo "  Build complete."
+if [ -t 1 ]; then
+    build_log=$(mktemp)
+    cargo build --release &>"$build_log" &
+    spin $! "Compiling..."
+    if ! wait $!; then
+        echo
+        cat "$build_log" >&2
+        rm -f "$build_log"
+        fail "Build failed"
+    fi
+    rm -f "$build_log"
+else
+    cargo build --release || fail "Build failed"
+fi
 
 binary="$PWD/target/release/cue"
 if ! "$binary" --version &>/dev/null; then
-    fail "Built binary failed to run. Check build output above."
+    fail "Built binary failed to run"
 fi
+
+new_version=$("$binary" --version 2>/dev/null || echo "cue")
+ok "Built $new_version"
 
 # --- Install binary ---
 
-step "Installing binary"
+step "Installing binary..."
 
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
 
 if [ "$upgrading" = "1" ]; then
-    default_dir=$(dirname "$existing_path")
+    install_dir=$(dirname "$existing_path")
 elif [ -d "$cargo_bin" ] && [[ ":$PATH:" == *":$cargo_bin:"* ]]; then
-    default_dir="$cargo_bin"
+    install_dir="$cargo_bin"
 else
-    default_dir="$HOME/.local/bin"
+    install_dir="$HOME/.local/bin"
 fi
-
-ask "  Install to [$default_dir]: " "$default_dir" install_dir
-install_dir="${install_dir/#\~/$HOME}"
 
 mkdir -p "$install_dir"
-if [ -f "$install_dir/cue" ]; then
-    echo "  Replacing existing binary at $install_dir/cue"
-fi
 tmpbin=$(mktemp "$install_dir/cue.XXXXXX")
 cleanup="$tmpbin"
 cp "$binary" "$tmpbin"
 chmod 755 "$tmpbin"
 mv "$tmpbin" "$install_dir/cue"
 cleanup=""
-echo "  Installed to $install_dir/cue"
+ok "Installed to $install_dir/cue"
 
 if command -v cue &>/dev/null; then
     resolved=$(command -v cue)
     if [ "$resolved" != "$install_dir/cue" ]; then
-        warn "Another 'cue' exists at $resolved and takes precedence in PATH"
-        warn "Ensure $install_dir comes before $(dirname "$resolved") in your PATH"
+        warn "Another 'cue' at $resolved takes precedence in PATH"
+        detail "Ensure $install_dir comes before $(dirname "$resolved") in PATH"
     fi
-fi
-
-detect_shell_rc() {
-    case "$OSTYPE" in
-        darwin*) echo "$HOME/.zshrc" ;;
-        *)
-            if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "${SHELL:-}")" = "zsh" ]; then
-                echo "${ZDOTDIR:-$HOME}/.zshrc"
-            elif [ -f "$HOME/.bashrc" ]; then
-                echo "$HOME/.bashrc"
-            else
-                echo "$HOME/.profile"
-            fi
-            ;;
-    esac
-}
-
-if [[ ":$PATH:" != *":$install_dir:"* ]]; then
+elif [[ ":$PATH:" != *":$install_dir:"* ]]; then
     warn "$install_dir is not in your PATH"
+    detect_shell_rc() {
+        case "$OSTYPE" in
+            darwin*) echo "$HOME/.zshrc" ;;
+            *)
+                if [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "${SHELL:-}")" = "zsh" ]; then
+                    echo "${ZDOTDIR:-$HOME}/.zshrc"
+                elif [ -f "$HOME/.bashrc" ]; then
+                    echo "$HOME/.bashrc"
+                else
+                    echo "$HOME/.profile"
+                fi
+                ;;
+        esac
+    }
     shell_rc=$(detect_shell_rc)
-    echo "  Add it to your $shell_rc:"
-    echo "    echo 'export PATH=\"$install_dir:\$PATH\"' >> $shell_rc"
+    detail "Add to $shell_rc:"
+    detail "  export PATH=\"$install_dir:\$PATH\""
 fi
 
 # --- Spotify credentials ---
 
-step "Spotify app setup"
+step "Spotify app setup..."
 
 case "$OSTYPE" in
     darwin*) config_dir="$HOME/Library/Application Support/cue" ;;
@@ -187,21 +195,17 @@ config_file="$config_dir/config.toml"
 write_config=1
 
 if [ -f "$config_file" ]; then
-    echo "  Config already exists: $config_file"
+    ok "Config exists at $config_file"
     if [ "$upgrading" = "1" ]; then
-        echo "  Keeping existing config."
         write_config=0
-    else
-        if ! confirm "  Overwrite? [y/N] " N; then
-            echo "  Keeping existing config."
-            write_config=0
-        fi
+    elif ! confirm "Overwrite? [y/N] " N; then
+        write_config=0
     fi
 fi
 
 if [ "$write_config" = "1" ] && [ "$auto_yes" = "1" ]; then
-    warn "Skipping credential setup in --yes mode."
-    echo "  Run install.sh again without --yes to configure, or edit $config_file manually."
+    warn "Skipping credential setup in --yes mode"
+    detail "Run install.sh again or edit $config_file"
     write_config=0
 fi
 
@@ -210,26 +214,18 @@ if [ "$write_config" = "1" ]; then
     echo "  Create a Spotify app to get your credentials:"
     echo "    1. Go to ${bold}https://developer.spotify.com/dashboard${reset}"
     echo "    2. Create a new app"
-    echo "    3. Set the redirect URI to ${bold}http://127.0.0.1:8888/callback${reset}"
+    echo "    3. Set redirect URI to ${bold}http://127.0.0.1:8888/callback${reset}"
     echo "    4. Copy the Client ID and Client Secret"
     echo
 
     read -rp "  Client ID: " client_id
-    if [ -z "$client_id" ]; then
-        fail "Client ID cannot be empty"
-    fi
-    if [[ ! "$client_id" =~ ^[a-zA-Z0-9]+$ ]]; then
-        fail "Client ID should contain only alphanumeric characters"
-    fi
+    [ -z "$client_id" ] && fail "Client ID cannot be empty"
+    [[ ! "$client_id" =~ ^[a-zA-Z0-9]+$ ]] && fail "Client ID should be alphanumeric"
 
     read -rsp "  Client Secret: " client_secret
     echo
-    if [ -z "$client_secret" ]; then
-        fail "Client Secret cannot be empty"
-    fi
-    if [[ ! "$client_secret" =~ ^[a-zA-Z0-9]+$ ]]; then
-        fail "Client Secret should contain only alphanumeric characters"
-    fi
+    [ -z "$client_secret" ] && fail "Client Secret cannot be empty"
+    [[ ! "$client_secret" =~ ^[a-zA-Z0-9]+$ ]] && fail "Client Secret should be alphanumeric"
 
     mkdir -p "$config_dir"
     (
@@ -240,79 +236,64 @@ client_id = "$client_id"
 client_secret = "$client_secret"
 EOF
     )
-    echo "  Config written to $config_file"
+    ok "Config written to $config_file"
 fi
 
 # --- Shell completions ---
 
-step "Shell completions"
+step "Setting up shell completions..."
 
 cue_bin="$install_dir/cue"
+shell_name=$(basename "${SHELL:-bash}")
 
-if confirm "  Generate shell completions? [Y/n] " Y; then
-    echo "  Shells: bash, zsh, fish"
-    ask "  Shell [bash]: " "bash" shell_choice
-
-    case "$shell_choice" in
-        bash)
-            comp_file="$HOME/.local/share/bash-completion/completions/cue"
-            mkdir -p "${comp_file%/*}"
-            "$cue_bin" completions bash > "$comp_file"
-            echo "  Written to $comp_file"
-            echo "  Run: source $comp_file"
-            ;;
-        zsh)
-            comp_dir="${ZDOTDIR:-$HOME}/.zfunc"
-            mkdir -p "$comp_dir"
-            "$cue_bin" completions zsh > "$comp_dir/_cue"
-            echo "  Written to $comp_dir/_cue"
-            echo "  Ensure $comp_dir is in your fpath and run: compinit"
-            ;;
-        fish)
-            comp_dir="$HOME/.config/fish/completions"
-            mkdir -p "$comp_dir"
-            "$cue_bin" completions fish > "$comp_dir/cue.fish"
-            echo "  Written to $comp_dir/cue.fish"
-            ;;
-        *)
-            warn "Unknown shell: $shell_choice (skipping)"
-            ;;
-    esac
-else
-    echo "  Skipped."
-fi
+case "$shell_name" in
+    bash)
+        comp_file="$HOME/.local/share/bash-completion/completions/cue"
+        mkdir -p "${comp_file%/*}"
+        "$cue_bin" completions bash > "$comp_file"
+        ok "bash completions installed"
+        detail "$comp_file"
+        ;;
+    zsh)
+        comp_dir="${ZDOTDIR:-$HOME}/.zfunc"
+        mkdir -p "$comp_dir"
+        "$cue_bin" completions zsh > "$comp_dir/_cue"
+        ok "zsh completions installed"
+        detail "$comp_dir/_cue"
+        ;;
+    fish)
+        comp_dir="$HOME/.config/fish/completions"
+        mkdir -p "$comp_dir"
+        "$cue_bin" completions fish > "$comp_dir/cue.fish"
+        ok "fish completions installed"
+        detail "$comp_dir/cue.fish"
+        ;;
+    *)
+        warn "Unknown shell '$shell_name', skipping completions"
+        detail "Run 'cue completions --help' to install manually"
+        ;;
+esac
 
 # --- Authenticate ---
 
 if [ "$upgrading" = "1" ]; then
-    step "Authentication"
-    echo "  Existing auth preserved. Skipping."
-else
-    step "Authentication"
-
-    if [ "$auto_yes" = "0" ] && confirm "  Authenticate with Spotify now? [Y/n] " Y; then
-        echo "  Running: cue devices"
-        echo "  Your browser will open for Spotify authorization."
-        echo
-        "$cue_bin" devices || warn "Authentication did not complete. Run 'cue devices' later to retry."
-    else
-        echo "  Skipped. Run any cue command later to trigger authentication."
-    fi
+    step "Authentication..."
+    ok "Existing auth preserved"
+elif [ "$auto_yes" = "0" ]; then
+    step "Authenticating with Spotify..."
+    echo "  Your browser will open for authorization."
+    echo
+    "$cue_bin" devices || warn "Authentication did not complete. Run 'cue devices' to retry."
 fi
 
 # --- Done ---
 
-if [ "$upgrading" = "1" ]; then
-    step "Upgrade complete"
-else
-    step "Setup complete"
-fi
-
-echo "  $("$cue_bin" --version 2>/dev/null || echo "cue installed")"
+echo
+echo "${green}${bold}✓${reset}${bold} $new_version installed successfully${reset}"
 echo
 echo "  Quick start:"
-echo "    cue devices          List available devices"
-echo "    cue play <query>     Play a track"
-echo "    cue now              Show what's playing"
-echo "    cue --help           See all commands"
+echo "    ${bold}cue devices${reset}          List available devices"
+echo "    ${bold}cue play <query>${reset}     Play a track"
+echo "    ${bold}cue now${reset}              Show what's playing"
+echo "    ${bold}cue --help${reset}           See all commands"
 echo
