@@ -56,6 +56,12 @@ pub fn build_client(config: Config) -> Result<AuthCodeSpotify> {
     }
 
     // No saved token — run the full OAuth flow.
+    // Bind the listener BEFORE opening the browser so the redirect can't
+    // arrive before we're ready (the user may already be authenticated,
+    // causing Spotify to redirect instantly).
+    let listener = TcpListener::bind("127.0.0.1:8888")
+        .context("could not listen on 127.0.0.1:8888 for OAuth callback")?;
+
     let auth_url = spotify
         .get_authorize_url(false)
         .context("could not build authorization URL")?;
@@ -68,7 +74,7 @@ pub fn build_client(config: Config) -> Result<AuthCodeSpotify> {
     }
 
     let code = crate::ui::with_spinner("Waiting for authentication...", || {
-        wait_for_callback(&spotify)
+        wait_for_callback(&spotify, listener)
     })?;
     spotify
         .request_token(&code)
@@ -511,10 +517,7 @@ pub fn fetch_radio_tracks(
     Ok(result)
 }
 
-fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
-    let listener = TcpListener::bind("127.0.0.1:8888")
-        .context("could not listen on 127.0.0.1:8888 for OAuth callback")?;
-
+fn wait_for_callback(spotify: &AuthCodeSpotify, listener: TcpListener) -> Result<String> {
     let (mut stream, _) = listener
         .accept()
         .context("failed to accept OAuth callback")?;
@@ -529,9 +532,13 @@ fn wait_for_callback(spotify: &AuthCodeSpotify) -> Result<String> {
         .context("failed to read callback request")?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-        <html><body><h1>Authenticated!</h1><p>You can close this tab.</p></body></html>";
-    stream.write_all(response).ok();
+    let body = "<html><body><h1>Authenticated!</h1><p>You can close this tab.</p></body></html>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).ok();
 
     let path = request
         .lines()
