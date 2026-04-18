@@ -6,7 +6,6 @@ A command-line Spotify remote control. It talks to the Spotify Web API to contro
 
 ## Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
 - A [Spotify Premium](https://www.spotify.com/premium/) account (Web API playback control requires Premium)
 - A Spotify app with a Client ID and Client Secret (see [Spotify app setup](#spotify-app-setup))
 
@@ -23,14 +22,12 @@ A command-line Spotify remote control. It talks to the Spotify Web API to contro
 ## Install
 
 ```bash
-git clone https://github.com/todor-ilivanov/cue.git
-cd cue
-./install.sh
+curl -LsSf https://github.com/todor-ilivanov/cue/releases/latest/download/cue-installer.sh | sh
 ```
 
-The install script walks you through building, installing the binary, configuring Spotify credentials, setting up shell completions, and authenticating.
+Prebuilt binaries are published to [GitHub Releases](https://github.com/todor-ilivanov/cue/releases) for Linux and macOS (x86_64 and arm64). The installer drops `cue` into `~/.cargo/bin` or `~/.local/bin`.
 
-See [Manual install](#manual-install) if you prefer to set things up yourself.
+Before the first command, create a Spotify app and write your credentials to `config.toml` — see [Spotify app setup](#spotify-app-setup) and [Config file](#config-file). Shell completions can be installed with `cue completions <shell>` (see [Shell completions](#shell-completions)).
 
 ## Commands
 
@@ -68,7 +65,7 @@ cue search --album abbey road     # browse albums
 
 ## Configuration
 
-### Manual install
+### Build from source
 
 ```bash
 cargo build --release
