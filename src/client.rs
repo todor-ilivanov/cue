@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
@@ -381,38 +380,6 @@ pub fn fetch_playlist_tracks(
     Ok(tracks)
 }
 
-pub struct RadioTrack {
-    pub id: String,
-}
-
-fn fetch_related_artists(access_token: &str, artist_id: &str) -> Result<Vec<(String, String)>> {
-    let resp = ureq::get(&format!(
-        "https://api.spotify.com/v1/artists/{artist_id}/related-artists"
-    ))
-    .set("Authorization", &format!("Bearer {access_token}"))
-    .call()
-    .context("failed to fetch related artists")?;
-
-    let body = resp
-        .into_string()
-        .context("failed to read related artists response")?;
-    let json: serde_json::Value =
-        serde_json::from_str(&body).context("failed to parse related artists response")?;
-
-    let artists = json["artists"]
-        .as_array()
-        .context("related artists response missing artists array")?;
-
-    Ok(artists
-        .iter()
-        .filter_map(|a| {
-            let id = a["id"].as_str()?.to_string();
-            let name = a["name"].as_str()?.to_string();
-            Some((id, name))
-        })
-        .collect())
-}
-
 /// A top track with display metadata.
 pub struct ArtistTopTrack {
     pub id: String,
@@ -458,63 +425,6 @@ pub fn fetch_artist_top_tracks_full(
 ) -> Result<Vec<ArtistTopTrack>> {
     let access_token = get_access_token(spotify)?;
     search_artist_tracks(&access_token, artist_name)
-}
-
-fn fetch_artist_top_tracks(access_token: &str, artist_name: &str) -> Result<Vec<RadioTrack>> {
-    Ok(search_artist_tracks(access_token, artist_name)?
-        .into_iter()
-        .map(|t| RadioTrack { id: t.id })
-        .collect())
-}
-
-/// Build a radio-style track list from related artists' top tracks.
-/// Returns track IDs interleaved across artists for variety.
-pub fn fetch_radio_tracks(
-    spotify: &AuthCodeSpotify,
-    artist_id: &str,
-    artist_name: &str,
-    exclude_track_id: &str,
-    limit: usize,
-) -> Result<Vec<RadioTrack>> {
-    let access_token = get_access_token(spotify)?;
-    let related = fetch_related_artists(&access_token, artist_id)?;
-
-    // Seed artist + up to 7 related artists = up to 80 candidate tracks
-    let mut artists: Vec<String> = vec![artist_name.to_string()];
-    artists.extend(related.into_iter().take(7).map(|(_, name)| name));
-
-    let mut buckets: Vec<Vec<RadioTrack>> = Vec::new();
-    for name in &artists {
-        if let Ok(tracks) = fetch_artist_top_tracks(&access_token, name) {
-            if !tracks.is_empty() {
-                buckets.push(tracks);
-            }
-        }
-    }
-
-    // Round-robin interleave for artist diversity
-    let mut result: Vec<RadioTrack> = Vec::new();
-    let mut seen = HashSet::new();
-    seen.insert(exclude_track_id.to_string());
-
-    let max_len = buckets.iter().map(|b| b.len()).max().unwrap_or(0);
-    for i in 0..max_len {
-        for bucket in &buckets {
-            if let Some(track) = bucket.get(i) {
-                if !seen.contains(&track.id) {
-                    seen.insert(track.id.clone());
-                    result.push(RadioTrack {
-                        id: track.id.clone(),
-                    });
-                }
-                if result.len() >= limit {
-                    return Ok(result);
-                }
-            }
-        }
-    }
-
-    Ok(result)
 }
 
 fn wait_for_callback(spotify: &AuthCodeSpotify, listener: TcpListener) -> Result<String> {

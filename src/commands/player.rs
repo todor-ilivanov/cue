@@ -150,7 +150,6 @@ struct TrackInfo {
     is_playing: bool,
     volume_percent: Option<u32>,
     track_id: Option<String>,
-    artist_id: Option<String>,
 }
 
 fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
@@ -166,25 +165,19 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
         return Ok(None);
     };
 
-    let (artist, title, album, duration_secs, track_id, artist_id) = match &item {
+    let (artist, title, album, duration_secs, track_id) = match &item {
         PlayableItem::Track(track) => (
             join_artist_names(&track.artists),
             track.name.clone(),
             track.album.name.clone(),
             track.duration.num_seconds(),
             track.id.as_ref().map(|id| id.id().to_string()),
-            track
-                .artists
-                .first()
-                .and_then(|a| a.id.as_ref())
-                .map(|id| id.id().to_string()),
         ),
         PlayableItem::Episode(episode) => (
             episode.show.name.clone(),
             episode.name.clone(),
             String::new(),
             episode.duration.num_seconds(),
-            None,
             None,
         ),
     };
@@ -198,7 +191,6 @@ fn fetch_now_playing(spotify: &AuthCodeSpotify) -> Result<Option<TrackInfo>> {
         is_playing,
         volume_percent,
         track_id,
-        artist_id,
     }))
 }
 
@@ -1169,7 +1161,6 @@ fn draw_help_overlay(frame: &mut Frame) {
         ("q", "Toggle queue"),
         ("/", "Search tracks, albums, playlists"),
         ("a", "Queue track from search results"),
-        ("R", "Start song radio"),
         ("r", "Refresh now playing"),
         ("esc", "Quit"),
     ];
@@ -1342,13 +1333,6 @@ fn run_player_loop(
                     let mut queue_target: Option<SearchResultEntry> = None;
                     let mut fetch_top_tracks: Option<String> = None;
                     let mut fetch_context_tracks: Option<(String, SearchPlayTarget)> = None;
-                    #[allow(clippy::type_complexity)]
-                    let mut start_radio: Option<(
-                        Option<String>,
-                        Option<String>,
-                        String,
-                        String,
-                    )> = None;
 
                     match &mut mode {
                         PlayerMode::Normal => match key.code {
@@ -1548,23 +1532,6 @@ fn run_player_loop(
                             }
                             KeyCode::Char('r') => {
                                 last_fetch = Instant::now() - poll_interval;
-                            }
-                            KeyCode::Char('R') => {
-                                if let Some(ref t) = info {
-                                    start_radio = Some((
-                                        t.track_id.clone(),
-                                        t.artist_id.clone(),
-                                        t.title.clone(),
-                                        t.artist.clone(),
-                                    ));
-                                } else {
-                                    status_message = Some((
-                                        "no track is currently playing".to_string(),
-                                        Instant::now(),
-                                        Color::Red,
-                                    ));
-                                    needs_redraw = true;
-                                }
                             }
                             KeyCode::Char('?') => {
                                 show_help = !show_help;
@@ -1892,87 +1859,6 @@ fn run_player_loop(
                         stashed_context_results = None;
                         mode = PlayerMode::Normal;
                         needs_redraw = true;
-                    }
-
-                    if let Some((tid, aid, title, artist)) = start_radio {
-                        match (tid, aid) {
-                            (Some(track_id), Some(artist_id)) => {
-                                match crate::client::fetch_radio_tracks(
-                                    spotify, &artist_id, &artist, &track_id, 50,
-                                ) {
-                                    Ok(recs) if recs.is_empty() => {
-                                        status_message = Some((
-                                            "no recommendations found for this track".to_string(),
-                                            Instant::now(),
-                                            Color::Red,
-                                        ));
-                                    }
-                                    Ok(recs) => {
-                                        let mut uris: Vec<PlayableId> = Vec::new();
-                                        if let Ok(id) = TrackId::from_id(&track_id) {
-                                            uris.push(PlayableId::Track(id));
-                                        }
-                                        for rec in &recs {
-                                            if let Ok(id) = TrackId::from_id(&rec.id) {
-                                                uris.push(PlayableId::Track(id));
-                                            }
-                                        }
-                                        match spotify.start_uris_playback(uris, None, None, None) {
-                                            Ok(()) => {
-                                                status_message = Some((
-                                                    format!(
-                                                        "Radio: {} tracks queued for {} \u{2014} {}",
-                                                        recs.len(),
-                                                        title,
-                                                        artist
-                                                    ),
-                                                    Instant::now(),
-                                                    Color::Green,
-                                                ));
-                                                deferred_fetch = Some(
-                                                    Instant::now() + Duration::from_millis(800),
-                                                );
-                                                queue_context = None;
-                                            }
-                                            Err(e) => {
-                                                status_message = Some((
-                                                    format!(
-                                                        "{}",
-                                                        api_error(e, "start radio playback")
-                                                    ),
-                                                    Instant::now(),
-                                                    Color::Red,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        status_message = Some((
-                                            format!("radio failed: {e}"),
-                                            Instant::now(),
-                                            Color::Red,
-                                        ));
-                                    }
-                                }
-                                needs_redraw = true;
-                            }
-                            (None, _) => {
-                                status_message = Some((
-                                    "current track has no ID".to_string(),
-                                    Instant::now(),
-                                    Color::Red,
-                                ));
-                                needs_redraw = true;
-                            }
-                            (_, None) => {
-                                status_message = Some((
-                                    "track has no artist — cannot build radio".to_string(),
-                                    Instant::now(),
-                                    Color::Red,
-                                ));
-                                needs_redraw = true;
-                            }
-                        }
                     }
                 }
                 Event::Resize(_, _) => {
@@ -2331,7 +2217,6 @@ mod tests {
             is_playing,
             volume_percent: volume,
             track_id: None,
-            artist_id: None,
         }
     }
 

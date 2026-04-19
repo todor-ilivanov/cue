@@ -44,7 +44,6 @@ cue search <query>        Search for tracks, albums (--album), or artists (--art
 cue devices               List available devices
 cue device [name]         Show active device, or transfer to one by name
 cue volume [level]        Show or set volume (0-100, +N, -N)
-cue radio                 Start a radio based on the currently playing track
 cue queue [query]         Show the queue, or add a track to it
 cue completions <shell>   Generate shell completions (bash, zsh, fish)
 ```
